@@ -581,22 +581,25 @@ class DatabaseManager:
 
 
     def record_staff_attendance(self, staff_id, attendance_type='check_in', confidence=1.0):
-        """Record staff check-in or check-out"""
+        """Record staff check-in or check-out and return status information"""
         try:
             current_date = date.today().strftime('%Y-%m-%d')
             current_time = datetime.now().strftime('%H:%M:%S')
 
+            already_checked_in = False
+
             if attendance_type == 'check_in':
                 # Check if already checked in today
                 existing = self.execute_query(
-                    "SELECT * FROM staff_attendance WHERE staff_id = ? AND date = ?",
+                    "SELECT id FROM staff_attendance WHERE staff_id = ? AND date = ?",
                     (staff_id, current_date), fetch=True
                 )
 
                 if existing:
+                    already_checked_in = True
                     # Update existing record
                     query = """
-                    UPDATE staff_attendance 
+                    UPDATE staff_attendance
                     SET check_in_time = ?, recognition_confidence = ?
                     WHERE staff_id = ? AND date = ?
                     """
@@ -614,22 +617,33 @@ class DatabaseManager:
             elif attendance_type == 'check_out':
                 # Update check-out time and calculate hours
                 query = """
-                UPDATE staff_attendance 
+                UPDATE staff_attendance
                 SET check_out_time = ?,
-                    hours_worked = CASE 
+                    hours_worked = CASE
                         WHEN check_in_time IS NOT NULL THEN
                             (julianday(date || ' ' || ?) - julianday(date || ' ' || check_in_time)) * 24
-                        ELSE 0 
+                        ELSE 0
                     END
                 WHERE staff_id = ? AND date = ?
                 """
                 self.execute_query(query, (current_time, current_time, staff_id, current_date))
 
-            return True
+            # Get total visits for staff member
+            total_visits_result = self.execute_query(
+                "SELECT COUNT(*) FROM staff_attendance WHERE staff_id = ?",
+                (staff_id,), fetch=True
+            )
+            total_visits = total_visits_result[0][0] if total_visits_result else 0
+
+            return {
+                'success': True,
+                'already_checked_in': already_checked_in,
+                'total_visits': total_visits
+            }
 
         except Exception as e:
             print(f"Error recording staff attendance: {e}")
-            return False
+            return {'success': False, 'already_checked_in': False, 'total_visits': 0}
 
 
     def get_staff_attendance_report(self, start_date, end_date):

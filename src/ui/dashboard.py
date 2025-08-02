@@ -47,6 +47,7 @@ class HotelDashboard:
         # Track customers counted for the current day
         self.current_date = date.today()
         self.customers_today = set()
+        self.staff_today = set()
 
         # Performance tracking
         self.fps_counter = 0
@@ -654,11 +655,12 @@ class HotelDashboard:
             print(f"❌ Track processing error: {e}")
 
     def _reset_daily_customers_if_needed(self):
-        """Reset daily customer tracking when the date changes."""
+        """Reset daily customer and staff tracking when the date changes."""
         today = date.today()
         if today != self.current_date:
             self.current_date = today
             self.customers_today.clear()
+            self.staff_today.clear()
 
 
     def process_customer_visit_with_counting(self, track):
@@ -725,20 +727,53 @@ class HotelDashboard:
         """Process staff attendance with counting integration"""
         try:
             if hasattr(self.face_engine, 'db_manager'):
+                self._reset_daily_customers_if_needed()
                 staff_info = self.face_engine.db_manager.get_staff_info(track.person_id)
 
                 if staff_info:
                     staff_name = staff_info.get('name', track.person_id)
 
-                    # Show attendance message
-                    attendance_msg = f"👨‍💼 STAFF CHECK-IN\n"
-                    attendance_msg += f"Name: {staff_name}\n"
-                    attendance_msg += f"Department: {staff_info.get('department', 'N/A')}\n"
-                    attendance_msg += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                    attendance_msg += f"Confidence: {track.confidence:.2f}\n"
-                    attendance_msg += "=" * 40 + "\n\n"
+                    result = self.face_engine.db_manager.record_staff_attendance(
+                        track.person_id, confidence=track.confidence
+                    )
+                    total_visits = result.get('total_visits', 0) if result else 0
+                    already_checked_in = (
+                        result.get('already_checked_in', False) or
+                        track.person_id in self.staff_today
+                    )
 
-                    self.display_welcome_message(attendance_msg)
+                    department = staff_info.get('department', 'N/A')
+
+                    if already_checked_in:
+                        track.set_message(
+                            f"Already counted for today\nVisit #{total_visits}"
+                        )
+                        info_msg = (
+                            f"⚠️ STAFF CHECK-IN\n"
+                            f"ID: {track.person_id}\n"
+                            f"Department: {department}\n"
+                            f"Already counted for today\n"
+                            f"Visit #{total_visits}\n"
+                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                            + "=" * 40 + "\n\n"
+                        )
+                        self.display_welcome_message(info_msg)
+                    else:
+                        self.staff_today.add(track.person_id)
+                        self.visit_counts['staff_checkins'] += 1
+                        track.set_message(
+                            f"Welcome {track.person_id}\nVisit #{total_visits}"
+                        )
+                        welcome_msg = (
+                            f"👨‍💼 STAFF CHECK-IN\n"
+                            f"ID: {track.person_id}\n"
+                            f"Department: {department}\n"
+                            f"Visit #{total_visits}\n"
+                            f"Confidence: {track.confidence:.2f}\n"
+                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                            + "=" * 40 + "\n\n"
+                        )
+                        self.display_welcome_message(welcome_msg)
 
                     # Add to recent detections
                     self.add_recent_detection("Staff", track.person_id, staff_name, track.confidence)

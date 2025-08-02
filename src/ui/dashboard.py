@@ -403,9 +403,34 @@ class HotelDashboard:
         try:
             frame_height, frame_width = frame.shape[:2]
 
+            # First, draw default boxes for tracks that are still being checked
+            checking_tracks = [t for t in tracks if getattr(t, "state", "") == "checking"]
+            if checking_tracks:
+                # Temporarily suppress messages for checking tracks
+                saved_messages = [getattr(t, "display_message", None) for t in checking_tracks]
+                for t in checking_tracks:
+                    t.display_message = None
+
+                if hasattr(self, "tracking_manager"):
+                    frame = self.tracking_manager.draw_tracks(frame, checking_tracks)
+                else:
+                    for t in checking_tracks:
+                        if hasattr(t, "bbox"):
+                            bbox = getattr(t, "display_bbox", t.bbox)
+                            x1, y1, x2, y2 = [int(coord) for coord in bbox]
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 2)
+
+                # Restore messages (if any) for future use
+                for t, msg in zip(checking_tracks, saved_messages):
+                    t.display_message = msg
+
             # Draw tracking boxes only for recognized individuals
             for track in tracks:
                 if not hasattr(track, 'bbox'):
+                    continue
+
+                # Skip tracks that are still being checked (already drawn above)
+                if getattr(track, 'state', '') == 'checking':
                     continue
 
                 # Only display tracks that have been identified

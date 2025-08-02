@@ -44,6 +44,10 @@ class HotelDashboard:
             'staff_checkins': 0
         }
 
+        # Track customers counted for the current day
+        self.current_date = date.today()
+        self.customers_today = set()
+
         # Performance tracking
         self.fps_counter = 0
         self.fps_start_time = time.time()
@@ -610,10 +614,6 @@ class HotelDashboard:
                         track.set_message("Known customer recognized")
                         track.fail_count = 0  # Reset on success
 
-                        # Update visit count
-                        self.visit_counts['known_customers'] += 1
-                        self.visit_counts['total_today'] += 1
-
                     elif person_type == 'staff' and confidence >= 0.65:
                         track.person_id = person_id
                         track.confidence = confidence
@@ -653,42 +653,71 @@ class HotelDashboard:
         except Exception as e:
             print(f"❌ Track processing error: {e}")
 
+    def _reset_daily_customers_if_needed(self):
+        """Reset daily customer tracking when the date changes."""
+        today = date.today()
+        if today != self.current_date:
+            self.current_date = today
+            self.customers_today.clear()
+
+
     def process_customer_visit_with_counting(self, track):
-        """Process customer visit with guaranteed message generation"""
+        """Process customer visits with daily duplicate prevention."""
         try:
             if hasattr(self.face_engine, 'db_manager'):
+                self._reset_daily_customers_if_needed()
                 customer_info = self.face_engine.db_manager.get_customer_info(track.customer_id)
 
                 if customer_info:
-                    customer_name = customer_info.get('name', f"Customer {track.customer_id}")
+                    total_visits = customer_info.get('total_visits', 0)
+                    last_visit = customer_info.get('last_visit')
+                    last_visit_date = None
+                    if last_visit:
+                        try:
+                            last_visit_date = datetime.fromisoformat(last_visit).date()
+                        except Exception:
+                            try:
+                                last_visit_date = datetime.strptime(last_visit, "%Y-%m-%d %H:%M:%S").date()
+                            except Exception:
+                                last_visit_date = None
 
-                    # Record visit
-                    success = self.face_engine.db_manager.record_visit(track.customer_id, track.confidence)
+                    today = self.current_date
 
-                    if success:
-                        visit_count = customer_info.get('total_visits', 0) + 1
-                        track.set_message(f"Welcome back!\nVisit #{visit_count}")
-
-                        # Generate welcome message
-                        welcome_msg = f"🎉 CUSTOMER RECOGNIZED\n"
-                        welcome_msg += f"Name: {customer_name}\n"
-                        welcome_msg += f"Visit Count: {visit_count}\n"
-                        welcome_msg += f"Confidence: {track.confidence:.2f}\n"
-                        welcome_msg += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                        welcome_msg += f"Customer ID: {track.customer_id}\n"
-                        welcome_msg += "=" * 40 + "\n\n"
-
-                        self.display_welcome_message(welcome_msg)
-
-                        # Add to recent detections
-                        self.add_recent_detection("Customer", track.customer_id, customer_name, track.confidence)
-
-                        print(f"✅ Customer visit processed: {customer_name} (Visit #{visit_count})")
+                    if track.customer_id in self.customers_today or last_visit_date == today:
+                        track.set_message(f"Already counted for today\nVisit #{total_visits}")
+                        info_msg = (
+                            f"⚠️ CUSTOMER VISIT\n"
+                            f"ID: {track.customer_id}\n"
+                            f"Already counted for today\n"
+                            f"Visit #{total_visits}\n"
+                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                            + "=" * 40 + "\n\n"
+                        )
+                        self.display_welcome_message(info_msg)
+                    else:
+                        success = self.face_engine.db_manager.record_visit(track.customer_id, track.confidence)
+                        if success:
+                            total_visits += 1
+                            self.customers_today.add(track.customer_id)
+                            self.visit_counts['known_customers'] += 1
+                            self.visit_counts['total_today'] += 1
+                            track.set_message(f"Welcome {track.customer_id}\nVisit #{total_visits}")
+                            welcome_msg = (
+                                f"🎉 CUSTOMER RECOGNIZED\n"
+                                f"ID: {track.customer_id}\n"
+                                f"Visit #{total_visits}\n"
+                                f"Confidence: {track.confidence:.2f}\n"
+                                f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                                + "=" * 40 + "\n\n"
+                            )
+                            self.display_welcome_message(welcome_msg)
+                            customer_name = customer_info.get('name', f"Customer {track.customer_id}")
+                            self.add_recent_detection("Customer", track.customer_id, customer_name, track.confidence)
+                            print(f"✅ Customer visit processed: {track.customer_id} (Visit #{total_visits})")
 
                     track.visit_processed = True
                     track.state = "verified_known"
                     track.state_timer = time.time()
-
         except Exception as e:
             print(f"❌ Customer visit processing error: {e}")
 

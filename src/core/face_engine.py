@@ -43,8 +43,9 @@ class FaceRecognitionEngine:
             )
 
             # Optimal detection size for accuracy[75]
-            det_size = (640, 640) if gpu_mode else (512, 512)
-            self.app.prepare(ctx_id=0 if gpu_mode else -1, det_size=det_size)
+            # Adjust detection size for better compatibility with various camera resolutions
+            det_size = (960, 960) if gpu_mode else (640, 640)
+            self.app.prepare(ctx_id=0 if gpu_mode else -1, det_size=det_size, det_thresh=0.5)
 
             print(f"✅ Enhanced face recognition initialized in {'GPU' if gpu_mode else 'CPU'} mode")
 
@@ -121,16 +122,13 @@ class FaceRecognitionEngine:
                 processed_frame = frame
                 scale_factor = 1.0
 
-            # Convert to RGB
-            rgb_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-
-            # Detect faces with LOWERED threshold for visibility
-            faces = self.app.get(rgb_frame)
+            # InsightFace expects BGR images
+            faces = self.app.get(processed_frame)
 
             detections = []
             for face in faces:
                 # MODIFIED: Lowered detection score for better visibility
-                if face.det_score < 0.5:  # Changed from 0.6
+                if face.det_score < 0.3:  # Lowered for debugging visibility
                     continue
 
                 # Scale coordinates back to original image
@@ -469,20 +467,19 @@ class FaceRecognitionEngine:
                 scale_factor = 1.0
                 print(f"  📏 No resize needed")
 
-            # Convert to RGB
-            rgb_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-            print(f"  🎨 Converted to RGB")
+            # InsightFace expects BGR input
+            print(f"  🎨 Using BGR frame for detection")
 
             # Detect faces
-            faces = self.app.get(rgb_frame)
+            faces = self.app.get(processed_frame)
             print(f"  👤 Raw detections: {len(faces)}")
 
             detections = []
             for i, face in enumerate(faces):
                 print(f"    Face {i + 1}: confidence={face.det_score:.3f}")
 
-                if face.det_score < 0.6:  # Your threshold
-                    print(f"      ❌ Rejected: Low confidence ({face.det_score:.3f} < 0.6)")
+                if face.det_score < 0.3:  # Debug threshold
+                    print(f"      ❌ Rejected: Low confidence ({face.det_score:.3f} < 0.3)")
                     continue
 
                 # Scale coordinates back

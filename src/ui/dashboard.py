@@ -343,6 +343,12 @@ class HotelDashboard:
                     time.sleep(0.02)
                     continue
 
+                # Debug: confirm frame is being processed
+                try:
+                    print(f"🔄 Processing frame size: {frame.shape}")
+                except Exception:
+                    pass
+
                 self.frame_count += 1
                 current_time = time.time()
 
@@ -351,7 +357,7 @@ class HotelDashboard:
                 detections = []
 
                 if self.frame_count % self.process_every_n_frames == 0:
-                    detections = self.face_engine.detect_faces(frame)
+                    detections = self.face_engine.debug_face_detection(frame)
                     tracks = self.tracking_manager.update_tracks(detections)
 
                     if detections:

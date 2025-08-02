@@ -333,10 +333,6 @@ class HotelDashboard:
                 self.frame_count += 1
                 current_time = time.time()
 
-                # Update current frame for capture system (thread-safe)
-                with self.capture_lock:
-                    self.current_frame = frame.copy()
-
                 # Process face detection every Nth frame for stability
                 detections = []
 
@@ -364,6 +360,10 @@ class HotelDashboard:
 
                 # Draw enhanced overlays with visit counts and bounding boxes
                 frame = self.draw_enhanced_overlays_stable(frame, detections, tracks)
+
+                # Update current frame for capture system (thread-safe)
+                with self.capture_lock:
+                    self.current_frame = frame.copy()
 
                 # GUI update with anti-flicker throttling
                 if current_time - last_gui_update >= self.frame_update_interval:
@@ -905,6 +905,9 @@ class HotelDashboard:
             # Force the UI to update immediately
             self.welcome_text.update_idletasks()
 
+            # Queue message for fullscreen mirroring
+            self.pending_welcome_messages.append(message)
+
         except Exception as e:
             print(f"❌ Welcome message display error: {e}")
 
@@ -1229,11 +1232,13 @@ class HotelDashboard:
             if now - getattr(self, '_last_fullscreen_msg', 0) > 1.0:  # 1 s interval
                 # Only update messages once per second
                 self._last_fullscreen_msg = now
-                # call display_welcome_message or update overlays here
-            
+                if self.pending_welcome_messages:
+                    self._fullscreen_msg = self.pending_welcome_messages.pop(0)
+
             frame = None
-            if hasattr(self, 'camera_manager') and self.camera_manager:
-                frame = self.camera_manager.get_frame()
+            with self.capture_lock:
+                if self.current_frame is not None:
+                    frame = self.current_frame.copy()
 
             if frame is not None:
                 # Get screen dimensions
@@ -1270,6 +1275,13 @@ class HotelDashboard:
                                     frame_resized, detections, tracks)
                     except:
                         pass
+
+                if getattr(self, '_fullscreen_msg', None):
+                    y0 = 40
+                    for i, line in enumerate(self._fullscreen_msg.splitlines()):
+                        cv2.putText(frame_resized, line, (20, y0 + i * 30),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2,
+                                    cv2.LINE_AA)
 
                 # Convert and display
                 frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)

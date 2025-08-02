@@ -217,12 +217,16 @@ class HotelDashboard:
         detections_frame = ttk.LabelFrame(right_panel, text="🔍 Live Detections", padding=5)
         detections_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        columns = ('Time', 'Type', 'ID', 'Confidence', 'Status')
+        # Include an Info column to display visit counts or names
+        columns = ('Time', 'Type', 'ID', 'Info', 'Confidence', 'Status')
         self.recent_tree = ttk.Treeview(detections_frame, columns=columns, show='headings', height=8)
 
         for col in columns:
+            width = 80
+            if col == 'Info':
+                width = 120
             self.recent_tree.heading(col, text=col)
-            self.recent_tree.column(col, width=80)
+            self.recent_tree.column(col, width=width)
 
         detection_scrollbar = ttk.Scrollbar(detections_frame, orient=tk.VERTICAL, command=self.recent_tree.yview)
         self.recent_tree.configure(yscrollcommand=detection_scrollbar.set)
@@ -885,7 +889,7 @@ class HotelDashboard:
                 status = "Active" if person_type in ["Customer", "Staff"] else "New"
 
                 new_item = self.recent_tree.insert('', 0, values=(
-                    timestamp, person_type, person_id, confidence_str, status
+                    timestamp, person_type, person_id, name, confidence_str, status
                 ))
 
                 # Limit to 30 items for performance

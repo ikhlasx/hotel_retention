@@ -71,7 +71,8 @@ class FaceRecognitionEngine:
             for customer in recent_customers:
                 if customer['embedding'] is not None:
                     try:
-                        embedding = np.frombuffer(customer['embedding'], dtype=np.float32)
+                        # Embeddings are stored using pickle to preserve dtype/shape
+                        embedding = pickle.loads(customer['embedding'])
                         self.customer_database[customer['customer_id']] = embedding
                         loaded_customers += 1
                     except Exception as e:

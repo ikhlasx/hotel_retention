@@ -539,6 +539,9 @@ class HotelDashboard:
                         self.visit_counts['total_today'] += 1
                         self.add_recent_detection("Known Customer", person_id, name, confidence)
                         track.visit_processed = True
+                    elif not success and not track.visit_processed:
+                        track.display_message = f"Already counted for today\nVisit #{visit_count}"
+                        track.visit_processed = True
                     track.state = "verified_known"
 
                 # Staff Found
@@ -583,51 +586,35 @@ class HotelDashboard:
                 customer_info = self.face_engine.db_manager.get_customer_info(track.customer_id)
 
                 if customer_info:
-                    total_visits = customer_info.get('total_visits', 0)
-                    last_visit = customer_info.get('last_visit')
-                    last_visit_date = None
-                    if last_visit:
-                        try:
-                            last_visit_date = datetime.fromisoformat(last_visit).date()
-                        except Exception:
-                            try:
-                                last_visit_date = datetime.strptime(last_visit, "%Y-%m-%d %H:%M:%S").date()
-                            except Exception:
-                                last_visit_date = None
+                    name = customer_info.get('name', track.customer_id)
+                    success, visit_count = self.face_engine.db_manager.record_visit(track.customer_id, track.confidence)
 
-                    today = self.current_date
-
-                    if track.customer_id in self.customers_today or last_visit_date == today:
-                        track.set_message(f"Already counted for today\nVisit #{total_visits}")
+                    if success:
+                        self.visit_counts['known_customers'] += 1
+                        self.visit_counts['total_today'] += 1
+                        track.set_message(f"Welcome {track.customer_id}\nVisit #{visit_count}")
+                        welcome_msg = (
+                            f"🎉 CUSTOMER RECOGNIZED\n"
+                            f"ID: {track.customer_id}\n"
+                            f"Visit #{visit_count}\n"
+                            f"Confidence: {track.confidence:.2f}\n"
+                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                            + "=" * 40 + "\n\n"
+                        )
+                        self.display_welcome_message(welcome_msg)
+                        self.add_recent_detection("Customer", track.customer_id, name, track.confidence)
+                        print(f"✅ Customer visit processed: {track.customer_id} (Visit #{visit_count})")
+                    else:
+                        track.set_message(f"Already counted for today\nVisit #{visit_count}")
                         info_msg = (
                             f"⚠️ CUSTOMER VISIT\n"
                             f"ID: {track.customer_id}\n"
                             f"Already counted for today\n"
-                            f"Visit #{total_visits}\n"
+                            f"Visit #{visit_count}\n"
                             f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
                             + "=" * 40 + "\n\n"
                         )
                         self.display_welcome_message(info_msg)
-                    else:
-                        success = self.face_engine.db_manager.record_visit(track.customer_id, track.confidence)
-                        if success:
-                            total_visits += 1
-                            self.customers_today.add(track.customer_id)
-                            self.visit_counts['known_customers'] += 1
-                            self.visit_counts['total_today'] += 1
-                            track.set_message(f"Welcome {track.customer_id}\nVisit #{total_visits}")
-                            welcome_msg = (
-                                f"🎉 CUSTOMER RECOGNIZED\n"
-                                f"ID: {track.customer_id}\n"
-                                f"Visit #{total_visits}\n"
-                                f"Confidence: {track.confidence:.2f}\n"
-                                f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                                + "=" * 40 + "\n\n"
-                            )
-                            self.display_welcome_message(welcome_msg)
-                            customer_name = customer_info.get('name', f"Customer {track.customer_id}")
-                            self.add_recent_detection("Customer", track.customer_id, customer_name, track.confidence)
-                            print(f"✅ Customer visit processed: {track.customer_id} (Visit #{total_visits})")
 
                     track.visit_processed = True
                     track.state = "verified_known"

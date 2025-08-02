@@ -1,5 +1,6 @@
 import sqlite3
 import numpy as np
+import pickle
 from datetime import datetime, date
 import threading
 import os
@@ -61,6 +62,12 @@ class DatabaseManager:
                         FOREIGN KEY (customer_id) REFERENCES customers (customer_id)
                     )
                 ''')
+
+                # Ensure unique visit per customer per day
+                cursor.execute('''
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_customer_date
+                    ON visits(customer_id, DATE(visit_time))
+                ''')
                 
                 # Staff detections table
                 cursor.execute('''
@@ -119,8 +126,8 @@ class DatabaseManager:
                 count = cursor.fetchone()[0]
                 customer_id = f"CUST_{count + 1:06d}"
                 
-                # Store embedding as blob
-                embedding_blob = embedding.tobytes() if embedding is not None else None
+                # Store embedding with dtype and shape preserved
+                embedding_blob = pickle.dumps(embedding.astype(np.float32)) if embedding is not None else None
                 
                 cursor.execute('''
                     INSERT INTO customers (customer_id, embedding, total_visits)
@@ -162,26 +169,35 @@ class DatabaseManager:
             return False
 
     def record_visit(self, customer_id, confidence=1.0):
-        """Record a customer visit with verification"""
+        """Record a customer visit with daily duplicate prevention"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
 
-                # Verify customer exists first
-                cursor.execute('SELECT customer_id FROM customers WHERE customer_id = ?', (customer_id,))
-                if not cursor.fetchone():
+                # Verify customer exists and get current visit count
+                cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
+                row = cursor.fetchone()
+                if not row:
                     print(f"❌ Cannot record visit: customer {customer_id} not found")
                     conn.close()
-                    return False
+                    return False, 0
+                current_visits = row[0]
 
-                # Record visit
-                cursor.execute('''
-                    INSERT INTO visits (customer_id, confidence)
-                    VALUES (?, ?)
-                ''', (customer_id, confidence))
+                # Skip if already counted today
+                if not self.is_new_visit_today(customer_id):
+                    conn.close()
+                    return False, current_visits
 
-                visit_id = cursor.lastrowid
+                try:
+                    cursor.execute('''
+                        INSERT INTO visits (customer_id, confidence)
+                        VALUES (?, ?)
+                    ''', (customer_id, confidence))
+                except sqlite3.IntegrityError:
+                    # Unique constraint prevented duplicate
+                    conn.close()
+                    return False, current_visits
 
                 # Update customer total visits
                 cursor.execute('''
@@ -191,20 +207,19 @@ class DatabaseManager:
                     WHERE customer_id = ?
                 ''', (customer_id,))
 
+                # Get updated visit count
+                cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
+                total_visits = cursor.fetchone()[0]
+
                 conn.commit()
                 conn.close()
 
-                # Verify the visit was recorded
-                if self._verify_visit_recorded(visit_id):
-                    print(f"✅ Visit recorded and verified: {customer_id} (Visit ID: {visit_id})")
-                    return True
-                else:
-                    print(f"❌ Visit verification failed: {customer_id}")
-                    return False
+                print(f"✅ Visit recorded: {customer_id} (Visit #{total_visits})")
+                return True, total_visits
 
         except Exception as e:
             print(f"❌ Error recording visit: {e}")
-            return False
+            return False, 0
 
     def _verify_visit_recorded(self, visit_id):
         """Verify that a visit was actually recorded in the database"""
@@ -286,7 +301,7 @@ class DatabaseManager:
                 customers = []
                 for row in cursor.fetchall():
                     customer_id, embedding_blob = row
-                    embedding = np.frombuffer(embedding_blob, dtype=np.float32)
+                    embedding = pickle.loads(embedding_blob)
                     customers.append({'id': customer_id, 'embedding': embedding})
                 
                 conn.close()

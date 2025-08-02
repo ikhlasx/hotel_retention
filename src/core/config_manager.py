@@ -26,7 +26,8 @@ class ConfigManager:
             "min_face_size": 50,
             "gpu_enabled": True,
             "language": "english",
-            "theme": "default"
+            "theme": "default",
+            "max_fail_count": 3
         }
         
         if os.path.exists(self.settings_file):

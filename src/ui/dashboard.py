@@ -560,10 +560,11 @@ class HotelDashboard:
             if track.state == "checking":
                 track.stability_frames += 1
 
-                if track.stability_frames >= 12 and current_time - track.state_timer >= 1.5:
+                # MODIFIED: Increased stability frames for more reliable identification
+                if track.stability_frames >= 15 and current_time - track.state_timer >= 1.5: # Changed from 12
                     # Identify person with enhanced threshold
                     person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
-
+                    
                     if person_type == 'customer' and confidence >= 0.55:
                         track.customer_id = person_id
                         track.confidence = confidence
@@ -868,49 +869,30 @@ class HotelDashboard:
             print(f"❌ Clear photos error: {e}")
 
     def display_welcome_message(self, message):
-        """Anti-flicker welcome message display with proper buffering"""
+        """Anti-flicker welcome message display with stable appending."""
         try:
-            current_time = time.time()
-
-            # Skip if too many recent updates (prevents rapid fire updates)
-            if current_time - self.last_message_update < 0.3:  # 300ms minimum
-                return
-
-            # Disable auto-redraw during update (critical for preventing flicker)
-            self.welcome_text.config(state='disabled')
-
-            # Store current scroll position
-            current_scroll = self.welcome_text.yview()
-
-            # Single atomic update with proper text widget state management
+            # Ensure the text widget is in a normal state to be modified
             self.welcome_text.config(state='normal')
-
-            # Clear and insert in one operation to prevent intermediate redraws
-            current_content = self.welcome_text.get('1.0', tk.END)
-            lines = current_content.split('\n')
-
-            # Keep only last 80 lines to prevent memory bloat
-            if len(lines) > 80:
-                new_content = '\n'.join(lines[-80:])
-                self.welcome_text.delete('1.0', tk.END)
-                self.welcome_text.insert('1.0', new_content)
-
-            # Insert new message at end
+            
+            # Insert the new message at the end of the text box
             self.welcome_text.insert(tk.END, message)
+            
+            # Automatically scroll to the end to show the latest message
+            self.welcome_text.see(tk.END)
+            
+            # Trim the text from the top if it exceeds 100 lines to prevent memory issues
+            num_lines = int(self.welcome_text.index('end-1c').split('.')[0])
+            if num_lines > 100:
+                self.welcome_text.delete('1.0', f'{num_lines - 100}.0')
 
-            # Always scroll to bottom for new messages
-            self.welcome_text.yview_moveto(1.0)
-
-            # Disable to prevent user editing and lock state
+            # Disable the widget to prevent user editing
             self.welcome_text.config(state='disabled')
-
-            # Force immediate GUI update to prevent batching conflicts
+            
+            # Force the UI to update immediately
             self.welcome_text.update_idletasks()
 
-            self.last_message_update = current_time
-
         except Exception as e:
-            print(f"❌ Anti-flicker message display error: {e}")
+            print(f"❌ Welcome message display error: {e}")
 
     def add_recent_detection(self, person_type, person_id, name, confidence=0.0):
         """Anti-flicker recent detection updates with proper state management"""

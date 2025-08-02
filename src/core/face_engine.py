@@ -20,10 +20,11 @@ class FaceRecognitionEngine:
         self.db_manager = DatabaseManager()
 
         # Research-backed threshold settings
-        self.min_face_size = 80  # Increased minimum face size
-        self.confidence_threshold = 0.55  # Customer identification threshold
-        self.detection_threshold = 0.65  # Face detection threshold[75]
-        self.quality_threshold = 0.7  # Overall quality threshold
+        # MODIFIED: Lowered thresholds for better real-world detection
+        self.min_face_size = 60  # Changed from 80
+        self.confidence_threshold = 0.55
+        self.detection_threshold = 0.6  # Changed from 0.65
+        self.quality_threshold = 0.7
 
         # Enhanced processing settings
         self.processing_resolution = (640, 480)  # Better balance of speed vs accuracy
@@ -123,18 +124,18 @@ class FaceRecognitionEngine:
 
             detections = []
             for face in faces:
-                # CRITICAL: Lower threshold from 0.85 to 0.6 for better detection
-                if face.det_score < 0.6:  # Changed from 0.85
+                # MODIFIED: Lowered detection score for better visibility
+                if face.det_score < 0.5:  # Changed from 0.6
                     continue
 
                 # Scale coordinates back to original image
                 bbox = face.bbox / scale_factor
                 x1, y1, x2, y2 = bbox.astype(int)
 
-                # Reduced minimum face size for better detection
+                # MODIFIED: Reduced minimum face size for better detection
                 face_width = x2 - x1
                 face_height = y2 - y1
-                if min(face_width, face_height) < 50:  # Reduced from 80
+                if min(face_width, face_height) < 40:  # Changed from 50
                     continue
 
                 # More lenient aspect ratio

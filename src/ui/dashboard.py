@@ -320,6 +320,8 @@ class HotelDashboard:
         last_auto_capture = 0
         frame_skip_counter = 0
 
+        tracks = []
+
         while self.running:
             try:
                 # Get stable frame with error handling
@@ -335,18 +337,15 @@ class HotelDashboard:
                 with self.capture_lock:
                     self.current_frame = frame.copy()
 
-                # Process face detection every 3rd frame for stability
+                # Process face detection every Nth frame for stability
                 detections = []
-                tracks = []
 
-                if self.frame_count % 3 == 0:
+                if self.frame_count % self.process_every_n_frames == 0:
                     detections = self.face_engine.detect_faces(frame)
+                    tracks = self.tracking_manager.update_tracks(detections)
 
                     if detections:
                         print(f"🔍 Frame {self.frame_count}: Found {len(detections)} stable detections")
-
-                        # Update tracking with stability
-                        tracks = self.tracking_manager.update_tracks(detections)
 
                         # Process each track with visit counting
                         for track in tracks:
@@ -360,6 +359,8 @@ class HotelDashboard:
 
                         # Update statistics
                         self.update_dashboard_statistics(detections, tracks)
+                else:
+                    tracks = list(self.tracking_manager.active_tracks.values())
 
                 # Draw enhanced overlays with visit counts and bounding boxes
                 frame = self.draw_enhanced_overlays_stable(frame, detections, tracks)
@@ -420,7 +421,7 @@ class HotelDashboard:
                 if not hasattr(track, 'bbox'):
                     continue
 
-                bbox = track.bbox
+                bbox = getattr(track, "display_bbox", track.bbox)
                 x1, y1, x2, y2 = [int(coord) for coord in bbox]
 
                 # Enhanced color mapping for track states
@@ -456,13 +457,26 @@ class HotelDashboard:
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
                 # Display status messages
-                if hasattr(track, 'display_message') and track.display_message:
-                    lines = track.display_message.split('\n')[:2]  # Max 2 lines
+                if (
+                    hasattr(track, "display_message")
+                    and track.display_message
+                    and time.time() - getattr(track, "message_time", 0) < track.display_duration
+                ):
+                    lines = track.display_message.split("\n")[:2]  # Max 2 lines
                     for j, line in enumerate(lines):
                         msg_y = y2 + 75 + (j * 25)
                         if msg_y < frame_height - 10:
-                            cv2.putText(frame, line, (x1, msg_y),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                            cv2.putText(
+                                frame,
+                                line,
+                                (x1, msg_y),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                color,
+                                2,
+                            )
+                elif hasattr(track, "display_message") and track.display_message:
+                    track.display_message = None
 
             # Draw visit counts overlay (top-left)
             self.draw_visit_counts_overlay(frame)
@@ -570,7 +584,7 @@ class HotelDashboard:
                         track.confidence = confidence
                         track.state = "processing_visit"
                         track.state_timer = current_time
-                        track.display_message = "Known customer recognized"
+                        track.set_message("Known customer recognized")
 
                         # Update visit count
                         self.visit_counts['known_customers'] += 1
@@ -581,7 +595,7 @@ class HotelDashboard:
                         track.confidence = confidence
                         track.state = "processing_staff_attendance"
                         track.state_timer = current_time
-                        track.display_message = "Staff member detected"
+                        track.set_message("Staff member detected")
 
                         # Update staff count
                         self.visit_counts['staff_checkins'] += 1
@@ -589,7 +603,7 @@ class HotelDashboard:
                     else:
                         track.state = "verified_unknown"
                         track.state_timer = current_time
-                        track.display_message = "New person detected"
+                        track.set_message("New person detected")
 
             # State: PROCESSING_VISIT
             elif track.state == "processing_visit" and not getattr(track, 'visit_processed', False):
@@ -610,7 +624,7 @@ class HotelDashboard:
                         track.customer_id = customer_id
                         track.state = "registered"
                         track.state_timer = current_time
-                        track.display_message = f"Registered as {customer_id}"
+                        track.set_message(f"Registered as {customer_id}")
 
                         # Update new customer count
                         self.visit_counts['new_customers'] += 1
@@ -646,7 +660,7 @@ class HotelDashboard:
 
                     if success:
                         visit_count = customer_info.get('total_visits', 0) + 1
-                        track.display_message = f"Welcome back!\nVisit #{visit_count}"
+                        track.set_message(f"Welcome back!\nVisit #{visit_count}")
 
                         # Generate welcome message
                         welcome_msg = f"🎉 CUSTOMER RECOGNIZED\n"

@@ -22,7 +22,11 @@ class FaceRecognitionEngine:
         # Research-backed threshold settings
         # MODIFIED: Lowered thresholds for better real-world detection
         self.min_face_size = 60  # Changed from 80
-        self.confidence_threshold = 0.55
+        # Allow configurable match threshold; default tuned for balanced
+        # precision/recall. Users can adjust via ConfigManager settings.json.
+        self.confidence_threshold = self.config.get_setting(
+            "confidence_threshold", 0.55
+        )
         self.detection_threshold = 0.6  # Changed from 0.65
         self.quality_threshold = 0.7
 

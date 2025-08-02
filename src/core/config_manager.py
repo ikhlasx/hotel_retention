@@ -26,7 +26,11 @@ class ConfigManager:
             "min_face_size": 50,
             "gpu_enabled": True,
             "language": "english",
-            "theme": "default"
+            "theme": "default",
+            # Adjustable face recognition match threshold. Lower values increase
+            # matches but may introduce false positives. Recommended range:
+            # 0.55-0.7 based on environment.
+            "confidence_threshold": 0.55,
         }
         
         if os.path.exists(self.settings_file):

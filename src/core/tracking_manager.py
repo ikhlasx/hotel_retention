@@ -4,6 +4,7 @@ from collections import OrderedDict, deque
 import cv2
 import time
 from datetime import datetime
+from .deepsort_tracker import DeepSort, Detection
 
 
 class OptimizedFaceTracker:
@@ -43,12 +44,10 @@ class TrackingManager:
     def __init__(self, gpu_mode=True):
         self.gpu_mode = gpu_mode
         self.active_tracks = {}
-        self.next_track_id = 1
 
-        # MODIFIED: Increased timeouts for better track stability.
-        self.track_timeout = 5.0  # Changed from 3.0
-        self.display_timeout = 3.0  # Changed from 2.0
-        self.max_distance_threshold = 9000  # Slightly more lenient matching
+        # DeepSort tracker instance
+        self.deepsort = DeepSort()
+
         # Maximum allowed failed identification attempts before dropping a track
         self.max_fail_count = 3
 
@@ -119,90 +118,38 @@ class TrackingManager:
             return frame
 
     def update_tracks(self, detections):
-        """Enhanced tracking pipeline with debug output"""
+        """Update tracking state using DeepSort."""
         current_time = time.time()
-        
+
         try:
-            # Match detections with existing tracks
-            used_detections = set()
-            for track_id, tracker in list(self.active_tracks.items()):
-                best_match = self._find_closest_detection_fast(tracker.bbox, detections, used_detections)
+            ds_detections = [Detection(d['bbox'], d['embedding']) for d in detections]
+            ds_tracks = self.deepsort.update(ds_detections)
 
-                if best_match:
-                    detection, idx = best_match
-                    
-                    # THE CRITICAL FIX: Update both bbox and display_bbox
-                    tracker.bbox = detection['bbox']
-                    tracker.display_bbox = detection['bbox'] # This ensures the box doesn't revert on coasting
-                    
+            updated_tracks = []
+            active_ids = set()
+            for track_id, bbox, embedding in ds_tracks:
+                active_ids.add(track_id)
+                if track_id in self.active_tracks:
+                    tracker = self.active_tracks[track_id]
+                    tracker.bbox = bbox
+                    tracker.display_bbox = bbox
                     tracker.last_seen = current_time
-                    tracker.embedding = detection['embedding']
-                    tracker.quality_score = detection.get('quality_score', 0)
-                    tracker.face_area = detection.get('face_area', 0)
+                    tracker.embedding = embedding
+                else:
+                    tracker = OptimizedFaceTracker(track_id, bbox, embedding)
+                    self.active_tracks[track_id] = tracker
+                updated_tracks.append(tracker)
 
-                    used_detections.add(idx)
+            # Remove stale tracks
+            for tid in list(self.active_tracks.keys()):
+                if tid not in active_ids:
+                    del self.active_tracks[tid]
 
-            # ... (rest of the update_tracks method is unchanged) ...
-            
-            # Create new tracks for unmatched detections
-            for idx, detection in enumerate(detections):
-                if idx not in used_detections:
-                    track_id = self.next_track_id
-                    self.next_track_id += 1
-
-                    new_track = OptimizedFaceTracker(track_id, detection['bbox'], detection['embedding'])
-                    new_track.quality_score = detection.get('quality_score', 0)
-                    new_track.face_area = detection.get('face_area', 0)
-
-                    self.active_tracks[track_id] = new_track
-
-            # Cleanup old tracks
-            self._cleanup_old_tracks_fast(current_time)
-            
-            return list(self.active_tracks.values())
+            return updated_tracks
 
         except Exception as e:
             print(f"❌ Tracking update error: {e}")
             return list(self.active_tracks.values())
-
-    def _find_closest_detection_fast(self, tracker_bbox, detections, used_indices):
-        """Ultra-fast closest detection finder from reference main.py"""
-        best_detection = None
-        best_distance = float('inf')
-        best_idx = -1
-
-        # Pre-calculate tracker center once
-        t_center = ((tracker_bbox[0] + tracker_bbox[2]) / 2, (tracker_bbox[1] + tracker_bbox[3]) / 2)
-
-        for idx, detection in enumerate(detections):
-            if idx in used_indices:
-                continue
-
-            # Simple center distance calculation
-            d_bbox = detection['bbox']
-            d_center = ((d_bbox[0] + d_bbox[2]) / 2, (d_bbox[1] + d_bbox[3]) / 2)
-
-            # Fast distance calculation (avoid sqrt for performance)
-            distance_sq = (t_center[0] - d_center[0]) ** 2 + (t_center[1] - d_center[1]) ** 2
-
-            if distance_sq < best_distance and distance_sq < self.max_distance_threshold:
-                best_distance = distance_sq
-                best_detection = detection
-                best_idx = idx
-
-        return (best_detection, best_idx) if best_detection else None
-
-    def _cleanup_old_tracks_fast(self, current_time):
-        """Ultra-fast track cleanup from reference main.py"""
-        tracks_to_remove = [
-            track_id for track_id, tracker in self.active_tracks.items()
-            if current_time - tracker.last_seen > self.track_timeout
-        ]
-
-        for track_id in tracks_to_remove:
-            del self.active_tracks[track_id]
-        
-        return tracks_to_remove
 
     def get_track_count(self):
         """Get number of active tracks"""

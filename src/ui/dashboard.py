@@ -560,6 +560,8 @@ class HotelDashboard:
             if not hasattr(track, 'state'):
                 track.state = "checking"
                 track.state_timer = current_time
+            if not hasattr(track, 'failed_identifications'):
+                track.failed_identifications = 0
 
             # State: CHECKING
             if track.state == "checking":
@@ -569,8 +571,9 @@ class HotelDashboard:
                 if track.stability_frames >= 15 and current_time - track.state_timer >= 1.5: # Changed from 12
                     # Identify person with enhanced threshold
                     person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
-                    
+
                     if person_type == 'customer' and confidence >= 0.55:
+                        track.failed_identifications = 0
                         track.customer_id = person_id
                         track.confidence = confidence
                         track.state = "processing_visit"
@@ -582,6 +585,7 @@ class HotelDashboard:
                         self.visit_counts['total_today'] += 1
 
                     elif person_type == 'staff' and confidence >= 0.65:
+                        track.failed_identifications = 0
                         track.person_id = person_id
                         track.confidence = confidence
                         track.state = "processing_staff_attendance"
@@ -593,9 +597,13 @@ class HotelDashboard:
 
                     else:
                         # No match found; keep checking without triggering messages
+                        track.failed_identifications += 1
                         track.state = "checking"
                         track.state_timer = current_time
                         track.set_message(None)
+                        if track.failed_identifications >= self.tracking_manager.max_unidentified_frames:
+                            self.tracking_manager.remove_track(track.track_id)
+                            return
 
             # State: PROCESSING_VISIT
             elif track.state == "processing_visit" and not getattr(track, 'visit_processed', False):

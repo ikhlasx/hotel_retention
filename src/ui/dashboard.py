@@ -31,6 +31,7 @@ class HotelDashboard:
 
         # Frame capture system
         self.current_frame = None
+        self.current_tracks = []  # Share track metadata with fullscreen loop
         self.capture_lock = threading.Lock()
         self.captured_photos = []
         self.auto_capture_enabled = False
@@ -334,6 +335,7 @@ class HotelDashboard:
                 current_time = time.time()
 
                 # Process face detection every Nth frame for stability
+                # Detection/tracking is centralized here for all display modes
                 detections = []
 
                 if self.frame_count % self.process_every_n_frames == 0:
@@ -364,6 +366,7 @@ class HotelDashboard:
                 # Update current frame for capture system (thread-safe)
                 with self.capture_lock:
                     self.current_frame = frame.copy()
+                    self.current_tracks = list(tracks)
 
                 # GUI update with anti-flicker throttling
                 if current_time - last_gui_update >= self.frame_update_interval:
@@ -1235,7 +1238,7 @@ class HotelDashboard:
             print(f"❌ Exit fullscreen error: {e}")
 
     def fullscreen_video_loop(self):
-        """Update fullscreen video display with enhanced processing"""
+        """Update fullscreen video display using frames from the main pipeline"""
         try:
             if not self.fullscreen_active or not self.fullscreen_window:
                 return
@@ -1248,9 +1251,12 @@ class HotelDashboard:
                     self._fullscreen_msg = self.pending_welcome_messages.pop(0)
 
             frame = None
+            tracks = []
             with self.capture_lock:
                 if self.current_frame is not None:
                     frame = self.current_frame.copy()
+                    # Copy tracks for potential fullscreen overlays
+                    tracks = list(getattr(self, "current_tracks", []))
 
             if frame is not None:
                 # Get screen dimensions
@@ -1269,24 +1275,9 @@ class HotelDashboard:
                     new_height = int(new_width / aspect_ratio)
 
                 # Resize and process
-                frame_resized = cv2.resize(frame, (new_width, new_height),
-                                           interpolation=cv2.INTER_LINEAR)
-
-                # Apply face detection if available
-                if hasattr(self, 'face_engine') and hasattr(self, 'tracking_manager'):
-                    try:
-                        if not hasattr(self, 'fs_frame_count'):
-                            self.fs_frame_count = 0
-                        self.fs_frame_count += 1
-
-                        if self.fs_frame_count % 3 == 0:
-                            detections = self.face_engine.detect_faces(frame_resized)
-                            if detections:
-                                tracks = self.tracking_manager.update_tracks(detections)
-                                frame_resized = self.draw_enhanced_overlays_stable(
-                                    frame_resized, detections, tracks)
-                    except:
-                        pass
+                frame_resized = cv2.resize(
+                    frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                # Detection/tracking overlays come from ultra_stable_video_processing
 
                 if getattr(self, '_fullscreen_msg', None):
                     y0 = 40

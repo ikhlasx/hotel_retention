@@ -24,12 +24,17 @@ class OptimizedFaceTracker:
         self.state = "checking"
         self.state_timer = time.time()
         self.display_message = "Checking..."
+        self.message_time = time.time()
         self.color = (128, 128, 128)
 
         # Recognition tracking
         self.recognition_complete = False
         self.database_checked = False
         self.visit_processed = False
+
+    def set_message(self, message):
+        self.display_message = message
+        self.message_time = time.time()
 
 
 class TrackingManager:
@@ -82,12 +87,26 @@ class TrackingManager:
                     cv2.putText(frame, track.state.upper(), (x1, y1 - 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
-                # Draw stable message
-                if hasattr(track, 'display_message') and track.display_message and track.stability_frames >= track.min_stability:
-                    lines = track.display_message.split('\n')[:2]
-                    for i, line in enumerate(lines):
-                        cv2.putText(frame, line, (x1, y2 + 20 + (i * 15)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                # Draw stable message within display duration
+                if (
+                    hasattr(track, 'display_message')
+                    and track.display_message
+                    and track.stability_frames >= track.min_stability
+                ):
+                    if current_time - getattr(track, 'message_time', 0) < track.display_duration:
+                        lines = track.display_message.split('\n')[:2]
+                        for i, line in enumerate(lines):
+                            cv2.putText(
+                                frame,
+                                line,
+                                (x1, y2 + 20 + (i * 15)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4,
+                                color,
+                                1,
+                            )
+                    else:
+                        track.display_message = None
 
             return frame
 

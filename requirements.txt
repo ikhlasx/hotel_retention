@@ -1,6 +1,7 @@
 opencv-python
 numpy
 scikit-learn
+scipy
 insightface
 Pillow
 pandas

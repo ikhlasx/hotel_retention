@@ -81,6 +81,15 @@ python main.py
 - **Monthly Reports**: Summary statistics
 - **Real-time Dashboard**: Live visitor information
 
+## Recognition Tuning
+
+### Confidence Threshold
+Adjust how strictly embeddings must match to identify a person. Lower values
+such as `0.55` increase matches but risk false positives, while higher values
+around `0.7` improve precision at the cost of missed identifications. The
+default can be modified via the `confidence_threshold` setting in
+`config/settings.json` to reflect real-world performance.
+
 ## Troubleshooting
 
 ### Camera Issues

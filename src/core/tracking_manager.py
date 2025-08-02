@@ -8,6 +8,16 @@ from .deepsort_tracker import DeepSort, Detection
 
 
 class OptimizedFaceTracker:
+    COLOR_MAP = {
+        'checking': (255, 255, 0),
+        'verified_unknown': (0, 255, 255),
+        'processing_visit': (0, 255, 0),
+        'registered': (255, 0, 255),
+        'verified_known': (0, 200, 0),
+        'processing_staff_attendance': (255, 0, 0),
+        'verified_staff': (255, 100, 0)
+    }
+
     def __init__(self, track_id, bbox, embedding):
         self.track_id = track_id
         self.bbox = bbox
@@ -22,11 +32,10 @@ class OptimizedFaceTracker:
         # MODIFIED: Increased stability requirement to filter noise from the more sensitive detector.
         self.stability_frames = 0
         self.min_stability = 12  # Changed from 10
-        self.state = "checking"
         self.state_timer = time.time()
         self.display_message = "Checking..."
         self.message_time = time.time()
-        self.color = (128, 128, 128)
+        self.state = "checking"
 
         # Recognition tracking
         self.recognition_complete = False
@@ -38,6 +47,15 @@ class OptimizedFaceTracker:
     def set_message(self, message):
         self.display_message = message
         self.message_time = time.time()
+
+    @property
+    def state(self):
+        return self._state
+
+    @state.setter
+    def state(self, value):
+        self._state = value
+        self.color = self.COLOR_MAP.get(value, (128, 128, 128))
 
 
 class TrackingManager:

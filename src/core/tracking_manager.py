@@ -1,10 +1,19 @@
 import cv2
 import time
 from datetime import datetime, date
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 from .deepsort_tracker import DeepSort, Detection
 from .database_manager import DatabaseManager
 from .face_engine import FaceRecognitionEngine
+
+
+def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two embedding vectors."""
+    a = a.reshape(1, -1)
+    b = b.reshape(1, -1)
+    return float(cosine_similarity(a, b)[0][0])
 
 
 class OptimizedFaceTracker:
@@ -21,7 +30,8 @@ class OptimizedFaceTracker:
 
         # Stability and recognition
         self.stability_frames = 0
-        self.min_stability = 15
+        # Lower stability requirement to trigger retention logic sooner
+        self.min_stability = 8
         self.state_timer = time.time()
         self.display_message = "Analyzing customer..."
         self.message_time = time.time()
@@ -104,37 +114,50 @@ class TrackingManager:
         self.customer_processing_timeout = 5.0
 
     def process_customer_retention(self, track):
+        """Run customer retention logic with cosine-similarity verification."""
         try:
             if (
                 not getattr(track, 'customer_processed', False)
                 and track.stability_frames >= track.min_stability
                 and hasattr(track, 'embedding')
             ):
-                person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
+                best_match_id = None
+                best_score = 0.0
+                threshold = 0.6
 
-                if person_type == 'customer' and person_id:
-                    visit_status = self.db_manager.check_daily_visit_status(person_id)
+                embedding = track.embedding
+                for cust_id, stored in self.face_engine.customer_database.items():
+                    score = cosine_sim(embedding, stored)
+                    if score > best_score:
+                        best_score = score
+                        best_match_id = cust_id
+                    if best_score >= 0.85:
+                        break
+
+                if best_score >= threshold and best_match_id:
+                    track.confidence = best_score
+                    visit_status = self.db_manager.check_daily_visit_status(best_match_id)
 
                     if visit_status['visited_today']:
-                        track.update_customer_info(person_id, visit_status)
+                        track.update_customer_info(best_match_id, visit_status)
                         track.set_retention_message(
-                            f"Welcome back {person_id}!\nAlready counted today\nTotal visits: {visit_status['total_visits']}\nFirst visit today: {visit_status['first_visit_time'][:5] if visit_status['first_visit_time'] else 'N/A'}"
+                            f"Welcome back!\nAlready counted today\nTotal visits: {visit_status['total_visits']}"
                         )
                     else:
-                        visit_result = self.db_manager.record_customer_visit(person_id, confidence)
+                        visit_result = self.db_manager.record_customer_visit(best_match_id, best_score)
                         if visit_result['success']:
-                            track.update_customer_info(person_id, visit_result)
+                            track.update_customer_info(best_match_id, visit_result)
                             track.set_retention_message(
-                                f"Welcome {person_id}!\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
+                                f"Welcome!\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
                             )
                         else:
                             track.set_retention_message("Welcome back!\nAlready processed today")
-
-                elif person_type == 'unknown':
+                else:
+                    track.confidence = 0.0
                     if track.stability_frames >= track.min_stability + 5:
                         new_customer_id = self.face_engine.register_new_customer(track.embedding)
                         if new_customer_id:
-                            visit_result = self.db_manager.record_customer_visit(new_customer_id, confidence)
+                            visit_result = self.db_manager.record_customer_visit(new_customer_id, best_score)
                             if visit_result['success']:
                                 track.update_customer_info(new_customer_id, visit_result)
                                 track.set_retention_message(
@@ -169,11 +192,11 @@ class TrackingManager:
                     tracker.last_seen = current_time
                     tracker.embedding = embedding
                     tracker.stability_frames += 1
+                    # Invoke retention logic after stability update
+                    self.process_customer_retention(tracker)
                 else:
                     tracker = OptimizedFaceTracker(track_id, bbox, embedding)
                     self.active_tracks[track_id] = tracker
-
-                self.process_customer_retention(tracker)
                 updated_tracks.append(tracker)
 
             for tid in list(self.active_tracks.keys()):

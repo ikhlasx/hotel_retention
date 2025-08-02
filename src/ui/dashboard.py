@@ -560,6 +560,8 @@ class HotelDashboard:
             if not hasattr(track, 'state'):
                 track.state = "checking"
                 track.state_timer = current_time
+            if not hasattr(track, 'fail_count'):
+                track.fail_count = 0
 
             # State: CHECKING
             if track.state == "checking":
@@ -576,6 +578,7 @@ class HotelDashboard:
                         track.state = "processing_visit"
                         track.state_timer = current_time
                         track.set_message("Known customer recognized")
+                        track.fail_count = 0  # Reset on success
 
                         # Update visit count
                         self.visit_counts['known_customers'] += 1
@@ -587,6 +590,7 @@ class HotelDashboard:
                         track.state = "processing_staff_attendance"
                         track.state_timer = current_time
                         track.set_message("Staff member detected")
+                        track.fail_count = 0  # Reset on success
 
                         # Update staff count
                         self.visit_counts['staff_checkins'] += 1
@@ -596,6 +600,16 @@ class HotelDashboard:
                         track.state = "checking"
                         track.state_timer = current_time
                         track.set_message(None)
+                        track.fail_count += 1
+
+                        # Drop track if it fails too many times
+                        if (
+                            self.tracking_manager
+                            and track.fail_count > self.tracking_manager.max_fail_count
+                        ):
+                            if track.track_id in self.tracking_manager.active_tracks:
+                                del self.tracking_manager.active_tracks[track.track_id]
+                            return
 
             # State: PROCESSING_VISIT
             elif track.state == "processing_visit" and not getattr(track, 'visit_processed', False):

@@ -1,0 +1,6 @@
+opencv-python
+numpy
+scikit-learn
+insightface
+Pillow
+pandas

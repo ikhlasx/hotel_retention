@@ -1,0 +1,10 @@
+{
+    "camera": {
+        "source_type": "ip",
+        "resolution": "1280x720",
+        "fps": 25,
+        "buffer_size": 5,
+        "transport": "TCP",
+        "rtsp_url": "rtsp://admin:Ikhlas@123@192.168.1.12:554/Streaming/Channels/101"
+    }
+}

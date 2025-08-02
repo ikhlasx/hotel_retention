@@ -406,6 +406,16 @@ class HotelDashboard:
         try:
             frame_height, frame_width = frame.shape[:2]
 
+            color_map = {
+                'checking': (255, 255, 0),
+                'verified_unknown': (0, 255, 255),
+                'processing_visit': (0, 255, 0),
+                'registered': (255, 0, 255),
+                'verified_known': (0, 200, 0),
+                'processing_staff_attendance': (255, 0, 0),
+                'verified_staff': (255, 100, 0)
+            }
+
             # First, draw default boxes for tracks that are still being checked
             checking_tracks = [t for t in tracks if getattr(t, "state", "") == "checking"]
             if checking_tracks:
@@ -446,15 +456,7 @@ class HotelDashboard:
                 bbox = getattr(track, "display_bbox", track.bbox)
                 x1, y1, x2, y2 = [int(coord) for coord in bbox]
 
-                # Enhanced color mapping for recognized states
-                color_map = {
-                    'processing_visit': (0, 255, 0),  # Green - known customer
-                    'verified_known': (0, 200, 0),  # Dark green - verified
-                    'processing_staff_attendance': (255, 0, 0),  # Red - staff
-                    'verified_staff': (255, 100, 0)  # Orange - verified staff
-                }
-
-                color = color_map.get(getattr(track, 'state', 'unknown'), (128, 128, 128))
+                color = color_map.get(track.state, (128, 128, 128))
 
                 # Draw thick tracking box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)

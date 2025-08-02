@@ -345,7 +345,7 @@ class HotelDashboard:
 
                         # Process each track with visit counting
                         for track in tracks:
-                            self.process_track_with_visit_counting(track, detections[0] if detections else None)
+                            self.process_track_with_visit_counting(track)
 
                         # Auto-capture on detection if enabled
                         if (self.auto_capture_var.get() and
@@ -403,33 +403,24 @@ class HotelDashboard:
         try:
             frame_height, frame_width = frame.shape[:2]
 
-            # Draw detection bounding boxes (bright green for raw detections)
-            for i, detection in enumerate(detections):
-                bbox = detection['bbox']
-                x1, y1, x2, y2 = [int(coord) for coord in bbox]
-
-                # Draw bright green detection box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-
-                # Detection confidence info
-                conf_text = f"Detection {i + 1}: {detection['confidence']:.3f}"
-                cv2.putText(frame, conf_text, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-            # Draw enhanced tracking boxes with state-based colors
+            # Draw tracking boxes only for recognized individuals
             for track in tracks:
                 if not hasattr(track, 'bbox'):
+                    continue
+
+                # Only display tracks that have been identified
+                if getattr(track, 'state', '') not in {
+                    'processing_visit', 'verified_known',
+                    'processing_staff_attendance', 'verified_staff'
+                }:
                     continue
 
                 bbox = getattr(track, "display_bbox", track.bbox)
                 x1, y1, x2, y2 = [int(coord) for coord in bbox]
 
-                # Enhanced color mapping for track states
+                # Enhanced color mapping for recognized states
                 color_map = {
-                    'checking': (255, 255, 0),  # Yellow - analyzing
-                    'verified_unknown': (0, 255, 255),  # Cyan - new person
                     'processing_visit': (0, 255, 0),  # Green - known customer
-                    'registered': (255, 0, 255),  # Magenta - newly registered
                     'verified_known': (0, 200, 0),  # Dark green - verified
                     'processing_staff_attendance': (255, 0, 0),  # Red - staff
                     'verified_staff': (255, 100, 0)  # Orange - verified staff
@@ -558,7 +549,7 @@ class HotelDashboard:
         except Exception as e:
             print(f"System status overlay error: {e}")
 
-    def process_track_with_visit_counting(self, track, detection):
+    def process_track_with_visit_counting(self, track):
         """Process track with integrated visit counting and state management"""
         try:
             current_time = time.time()
@@ -601,9 +592,10 @@ class HotelDashboard:
                         self.visit_counts['staff_checkins'] += 1
 
                     else:
-                        track.state = "verified_unknown"
+                        # No match found; keep checking without triggering messages
+                        track.state = "checking"
                         track.state_timer = current_time
-                        track.set_message("New person detected")
+                        track.set_message(None)
 
             # State: PROCESSING_VISIT
             elif track.state == "processing_visit" and not getattr(track, 'visit_processed', False):
@@ -613,35 +605,6 @@ class HotelDashboard:
             elif track.state == "processing_staff_attendance" and not getattr(track, 'visit_processed', False):
                 self.process_staff_attendance_with_counting(track)
 
-            # State: VERIFIED_UNKNOWN
-            elif track.state == "verified_unknown":
-                if (track.stability_frames >= 25 and
-                        current_time - track.state_timer >= 4.0):
-
-                    # Auto-register new customer
-                    customer_id = self.face_engine.register_new_customer(track.embedding)
-                    if customer_id:
-                        track.customer_id = customer_id
-                        track.state = "registered"
-                        track.state_timer = current_time
-                        track.set_message(f"Registered as {customer_id}")
-
-                        # Update new customer count
-                        self.visit_counts['new_customers'] += 1
-                        self.visit_counts['total_today'] += 1
-
-                        # Display registration message
-                        reg_msg = f"🆕 NEW CUSTOMER REGISTERED\n"
-                        reg_msg += f"Customer ID: {customer_id}\n"
-                        reg_msg += f"Track ID: {track.track_id}\n"
-                        reg_msg += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                        reg_msg += f"Quality Score: {getattr(track, 'quality_score', 'N/A')}\n"
-                        reg_msg += "=" * 40 + "\n\n"
-
-                        self.display_welcome_message(reg_msg)
-
-                        # Add to recent detections
-                        self.add_recent_detection("New Customer", customer_id, "New Guest", track.confidence)
 
         except Exception as e:
             print(f"❌ Track processing error: {e}")
@@ -762,10 +725,16 @@ class HotelDashboard:
         """Automatically capture photos when faces are detected"""
         try:
             if tracks and len(tracks) > 0:
-                # Auto-capture for quality detections
+                # Auto-capture only for recognized tracks
                 for track in tracks:
-                    if (hasattr(track, 'confidence') and track.confidence > 0.6 and
-                            hasattr(track, 'stability_frames') and track.stability_frames > 15):
+                    if (
+                        getattr(track, 'state', '') in {
+                            'processing_visit', 'verified_known',
+                            'processing_staff_attendance', 'verified_staff'
+                        }
+                        and hasattr(track, 'confidence') and track.confidence > 0.6
+                        and hasattr(track, 'stability_frames') and track.stability_frames > 15
+                    ):
 
                         success = self.capture_current_frame()
                         if success:
@@ -1088,17 +1057,21 @@ class HotelDashboard:
                 except:
                     pass  # Graceful fallback if statistics not available
 
-            # Auto-populate live detections from tracks
+            # Auto-populate live detections from recognized tracks
             if tracks:
                 for track in tracks:
-                    time_str = datetime.now().strftime('%H:%M:%S')
-                    self.recent_tree.insert('', 'end', values=(
-                        time_str,
-                        getattr(track, 'state', 'tracking'),
-                        track.track_id,
-                        f"{getattr(track, 'confidence', 0):.2f}",
-                        "Live"
-                    ))
+                    if getattr(track, 'state', '') in {
+                        'processing_visit', 'verified_known',
+                        'processing_staff_attendance', 'verified_staff'
+                    }:
+                        time_str = datetime.now().strftime('%H:%M:%S')
+                        self.recent_tree.insert('', 'end', values=(
+                            time_str,
+                            getattr(track, 'state', 'tracking'),
+                            track.track_id,
+                            f"{getattr(track, 'confidence', 0):.2f}",
+                            "Live"
+                        ))
                 # Limit treeview size
                 children = self.recent_tree.get_children()
                 if len(children) > 50:

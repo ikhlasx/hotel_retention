@@ -31,6 +31,8 @@ class OptimizedFaceTracker:
         self.recognition_complete = False
         self.database_checked = False
         self.visit_processed = False
+        # Count consecutive failed identification attempts
+        self.fail_count = 0
 
     def set_message(self, message):
         self.display_message = message
@@ -47,6 +49,8 @@ class TrackingManager:
         self.track_timeout = 5.0  # Changed from 3.0
         self.display_timeout = 3.0  # Changed from 2.0
         self.max_distance_threshold = 9000  # Slightly more lenient matching
+        # Maximum allowed failed identification attempts before dropping a track
+        self.max_fail_count = 3
 
     def draw_tracks(self, frame, tracks):
         """Draw stabilized tracking boxes without blinking"""

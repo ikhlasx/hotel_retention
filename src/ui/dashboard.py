@@ -9,6 +9,7 @@ import time
 from datetime import datetime, date
 import numpy as np
 import os
+import sqlite3
 
 # Import optimized modules
 from core.face_engine import FaceRecognitionEngine
@@ -23,6 +24,7 @@ class HotelDashboard:
         self.gpu_available = gpu_available
         self.running = False
         self.config = ConfigManager()
+        self.db_manager = None
 
         # Initialize fullscreen variables FIRST
         self.fullscreen_window = None
@@ -274,6 +276,7 @@ class HotelDashboard:
             gpu_mode = self.mode_var.get() == "GPU" and self.gpu_available
 
             self.face_engine = FaceRecognitionEngine(gpu_mode=gpu_mode)
+            self.db_manager = self.face_engine.db_manager
             # Set optimal detection threshold for stability
             if hasattr(self.face_engine, 'detection_threshold'):
                 self.face_engine.detection_threshold = 0.6  # Balanced for visibility and accuracy
@@ -352,7 +355,7 @@ class HotelDashboard:
 
                         # Process each track with visit counting
                         for track in tracks:
-                            self.process_track_with_visit_counting(track, None)
+                            self.process_track_with_visit_counting(track, frame)
 
                         # Auto-capture on detection if enabled
                         if (self.auto_capture_var.get() and
@@ -417,10 +420,8 @@ class HotelDashboard:
                 bbox = track.bbox
                 x1, y1, x2, y2 = [int(coord) for coord in bbox]
 
-                # Use green for verified customers/staff, yellow for checking
-                color = (0, 255, 0)  # Green for verified
-                if getattr(track, 'state', 'unknown') == 'checking':
-                    color = (0, 255, 255)  # Yellow for checking
+                # Color based on track state
+                color = track.color if hasattr(track, 'color') else (0, 255, 0)
 
                 # Draw the bounding box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -511,178 +512,141 @@ class HotelDashboard:
         except Exception as e:
             print(f"System status overlay error: {e}")
 
-    def process_track_with_visit_counting(self, track, detection):
-        """Process track with integrated visit counting and state management"""
+    def process_track_with_visit_counting(self, track, frame):
+        """Enhanced track processing with customer retention system"""
         try:
             current_time = time.time()
 
-            # Initialize track attributes if not present
-            if not hasattr(track, 'state'):
-                track.state = "checking"
-                track.state_timer = current_time
-                track.visit_processed = False
+            if track.stability_frames < track.min_stability:
+                track.set_message("Analyzing...")
+                return
 
-            # State: CHECKING - Identify the person
-            if track.state == "checking" and current_time - track.state_timer > 1.0:  # Check after 1 second
-                person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
+            if getattr(track, 'customer_processed', False):
+                return
 
-                # --- THIS IS THE KEY FIX ---
-                # Known Customer Found
-                if person_type == 'customer' and confidence > 0.6:
-                    customer_info = self.face_engine.db_manager.get_customer_info(person_id)
-                    name = customer_info.get('name', f"Customer {person_id}")
-                    success, visit_count = self.face_engine.db_manager.record_visit(person_id, confidence)
+            if not hasattr(track, 'embedding'):
+                return
 
-                    if success and not track.visit_processed:
-                        track.display_message = f"Welcome {name}!\nVisits: {visit_count}"
-                        self.visit_counts['known_customers'] += 1
-                        self.visit_counts['total_today'] += 1
-                        self.add_recent_detection("Known Customer", person_id, name, confidence)
-                        track.visit_processed = True
-                    elif not success and not track.visit_processed:
-                        track.display_message = f"Already counted for today\nVisit #{visit_count}"
-                        track.visit_processed = True
-                    track.state = "verified_known"
+            person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
+            track.confidence = confidence
 
-                # Staff Found
-                elif person_type == 'staff' and confidence > 0.7:
-                    staff_info = self.face_engine.db_manager.get_staff_info(person_id)
-                    name = staff_info.get('name', person_id)
-                    track.display_message = f"Staff: {name}"
-                    if not track.visit_processed:
-                        self.visit_counts['staff_checkins'] += 1
-                        self.add_recent_detection("Staff", person_id, name, confidence)
-                        track.visit_processed = True
-                    track.state = "verified_staff"
-
-                # New Customer (Unknown Person)
-                else:
-                    if not track.visit_processed:
-                        customer_id = self.face_engine.register_new_customer(track.embedding)
-                        track.display_message = f"Welcome! New Guest ID: {customer_id}"
-                        self.visit_counts['new_customers'] += 1
-                        self.visit_counts['total_today'] += 1
-                        self.add_recent_detection("New Customer", customer_id, "N/A", 0)
-                        track.visit_processed = True
-                    track.state = "registered"
+            if person_type == 'customer' and person_id:
+                self.process_existing_customer(track, person_id, confidence)
+            elif person_type == 'staff' and person_id:
+                self.process_staff_member(track, person_id, confidence)
+            elif person_type == 'unknown':
+                self.process_unknown_person(track, confidence)
 
         except Exception as e:
             print(f"❌ Track processing error: {e}")
 
-    def _reset_daily_customers_if_needed(self):
-        """Reset daily customer and staff tracking when the date changes."""
-        today = date.today()
-        if today != self.current_date:
-            self.current_date = today
-            self.customers_today.clear()
-            self.staff_today.clear()
-
-
-    def process_customer_visit_with_counting(self, track):
-        """Process customer visits with daily duplicate prevention."""
+    def process_existing_customer(self, track, customer_id, confidence):
+        """Process existing customer with retention tracking"""
         try:
-            if hasattr(self.face_engine, 'db_manager'):
-                self._reset_daily_customers_if_needed()
-                customer_info = self.face_engine.db_manager.get_customer_info(track.customer_id)
+            visit_status = self.db_manager.check_daily_visit_status(customer_id)
 
-                if customer_info:
-                    name = customer_info.get('name', track.customer_id)
-                    success, visit_count = self.face_engine.db_manager.record_visit(track.customer_id, track.confidence)
-
-                    if success:
+            if visit_status['visited_today']:
+                track.state = "already_counted_today"
+                track.set_message(
+                    f"Welcome back!\nCustomer: {customer_id}\nAlready counted today\nTotal visits: {visit_status['total_visits']}"
+                )
+                self.add_recent_detection(
+                    "Returning Customer",
+                    customer_id,
+                    f"Already counted (Total: {visit_status['total_visits']})",
+                    confidence,
+                )
+            else:
+                visit_result = self.db_manager.record_customer_visit(customer_id, confidence)
+                if visit_result['success']:
+                    track.state = "new_visit_recorded"
+                    track.set_message(
+                        f"Welcome!\nCustomer: {customer_id}\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
+                    )
+                    self.visit_counts['total_today'] += 1
+                    if visit_result['total_visits'] == 1:
+                        self.visit_counts['new_customers'] += 1
+                    else:
                         self.visit_counts['known_customers'] += 1
-                        self.visit_counts['total_today'] += 1
-                        track.set_message(f"Welcome {track.customer_id}\nVisit #{visit_count}")
-                        welcome_msg = (
-                            f"🎉 CUSTOMER RECOGNIZED\n"
-                            f"ID: {track.customer_id}\n"
-                            f"Visit #{visit_count}\n"
-                            f"Confidence: {track.confidence:.2f}\n"
-                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                            + "=" * 40 + "\n\n"
-                        )
-                        self.display_welcome_message(welcome_msg)
-                        self.add_recent_detection("Customer", track.customer_id, name, track.confidence)
-                        print(f"✅ Customer visit processed: {track.customer_id} (Visit #{visit_count})")
+                    self.add_recent_detection(
+                        "Customer Visit",
+                        customer_id,
+                        f"Visit #{visit_result['total_visits']}",
+                        confidence,
+                    )
+                    welcome_msg = (
+                        f"🎉 CUSTOMER VISIT RECORDED\n"
+                        f"Customer ID: {customer_id}\n"
+                        f"Visit Number: {visit_result['total_visits']}\n"
+                        f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                    )
+                    if visit_result['total_visits'] == 1:
+                        welcome_msg += "Status: First-time customer\n"
                     else:
-                        track.set_message(f"Already counted for today\nVisit #{visit_count}")
-                        info_msg = (
-                            f"⚠️ CUSTOMER VISIT\n"
-                            f"ID: {track.customer_id}\n"
-                            f"Already counted for today\n"
-                            f"Visit #{visit_count}\n"
-                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                            + "=" * 40 + "\n\n"
-                        )
-                        self.display_welcome_message(info_msg)
+                        welcome_msg += "Status: Returning customer\n"
+                    welcome_msg += "=" * 40 + "\n\n"
+                    self.display_welcome_message(welcome_msg)
+                else:
+                    track.state = "already_counted_today"
+                    track.set_message("Welcome!\nAlready processed today")
 
-                    track.visit_processed = True
-                    track.state = "verified_known"
-                    track.state_timer = time.time()
+            track.customer_processed = True
+
         except Exception as e:
-            print(f"❌ Customer visit processing error: {e}")
+            print(f"❌ Existing customer processing error: {e}")
+            track.set_message("Welcome customer!")
 
-    def process_staff_attendance_with_counting(self, track):
-        """Process staff attendance with counting integration"""
+    def process_staff_member(self, track, staff_id, confidence):
+        """Process staff member detection"""
         try:
-            if hasattr(self.face_engine, 'db_manager'):
-                self._reset_daily_customers_if_needed()
-                staff_info = self.face_engine.db_manager.get_staff_info(track.person_id)
+            staff_info = self.db_manager.get_staff_info(staff_id)
+            name = staff_info.get('name', staff_id) if staff_info else staff_id
+            track.state = "processing_customer"
+            track.set_message(f"Staff: {name}")
+            self.visit_counts['staff_checkins'] += 1
+            self.add_recent_detection("Staff", staff_id, name, confidence)
+            track.customer_processed = True
+        except Exception as e:
+            print(f"❌ Staff member processing error: {e}")
 
-                if staff_info:
-                    staff_name = staff_info.get('name', track.person_id)
-
-                    result = self.face_engine.db_manager.record_staff_attendance(
-                        track.person_id, confidence=track.confidence
-                    )
-                    total_visits = result.get('total_visits', 0) if result else 0
-                    already_checked_in = (
-                        result.get('already_checked_in', False) or
-                        track.person_id in self.staff_today
-                    )
-
-                    department = staff_info.get('department', 'N/A')
-
-                    if already_checked_in:
+    def process_unknown_person(self, track, confidence):
+        """Process unknown person with potential customer registration"""
+        try:
+            if track.stability_frames >= track.min_stability + 10:
+                track.state = "processing_customer"
+                track.set_message("Registering new customer...")
+                new_customer_id = self.face_engine.register_new_customer(track.embedding)
+                if new_customer_id:
+                    visit_result = self.db_manager.record_customer_visit(new_customer_id, confidence)
+                    if visit_result['success']:
+                        track.state = "new_customer_registered"
                         track.set_message(
-                            f"Already counted for today\nVisit #{total_visits}"
+                            f"Welcome new customer!\nID: {new_customer_id}\nFirst visit recorded\nThank you for choosing us!"
                         )
-                        info_msg = (
-                            f"⚠️ STAFF CHECK-IN\n"
-                            f"ID: {track.person_id}\n"
-                            f"Department: {department}\n"
-                            f"Already counted for today\n"
-                            f"Visit #{total_visits}\n"
-                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                            + "=" * 40 + "\n\n"
-                        )
-                        self.display_welcome_message(info_msg)
-                    else:
-                        self.staff_today.add(track.person_id)
-                        self.visit_counts['staff_checkins'] += 1
-                        track.set_message(
-                            f"Welcome {track.person_id}\nVisit #{total_visits}"
-                        )
+                        self.visit_counts['total_today'] += 1
+                        self.visit_counts['new_customers'] += 1
+                        self.add_recent_detection("New Customer", new_customer_id, "First visit", confidence)
                         welcome_msg = (
-                            f"👨‍💼 STAFF CHECK-IN\n"
-                            f"ID: {track.person_id}\n"
-                            f"Department: {department}\n"
-                            f"Visit #{total_visits}\n"
-                            f"Confidence: {track.confidence:.2f}\n"
-                            f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                            f"🎉 NEW CUSTOMER REGISTERED\n"
+                            f"Customer ID: {new_customer_id}\n"
+                            f"First Visit: {datetime.now().strftime('%H:%M:%S')}\n"
+                            f"Status: New customer registration\n"
+                            f"Welcome to our store!\n"
                             + "=" * 40 + "\n\n"
                         )
                         self.display_welcome_message(welcome_msg)
-
-                    # Add to recent detections
-                    self.add_recent_detection("Staff", track.person_id, staff_name, track.confidence)
-
-                    track.visit_processed = True
-                    track.state = "verified_staff"
-                    track.state_timer = time.time()
-
+                    else:
+                        track.set_message("Welcome! Processing...")
+                else:
+                    track.set_message("Welcome visitor!")
+                track.customer_processed = True
+            else:
+                track.set_message(
+                    f"Analyzing new visitor...\n({track.stability_frames}/{track.min_stability + 10})"
+                )
         except Exception as e:
-            print(f"❌ Staff attendance processing error: {e}")
+            print(f"❌ Unknown person processing error: {e}")
+            track.set_message("Welcome!")
 
     def capture_current_frame(self):
         """Capture current frame as photo with timestamp"""
@@ -1044,26 +1008,60 @@ class HotelDashboard:
             self.update_in_progress = False
 
     def update_realtime_dashboard(self):
-        """Update dashboard UI elements with real-time data and live detections."""
+        """Update dashboard with real-time customer retention statistics"""
         try:
-            # --- THIS IS THE KEY FIX ---
-            # Update "Today's Activity" panel
-            self.visits_today_label.config(text=f"Total Visits: {self.visit_counts['total_today']}")
-            self.known_customers_label.config(text=f"Known Customers: {self.visit_counts['known_customers']}")
-            self.new_customers_label.config(text=f"New Customers: {self.visit_counts['new_customers']}")
-            self.staff_checkins_label.config(text=f"Staff Check-ins: {self.visit_counts['staff_checkins']}")
+            today_stats = self.db_manager.get_today_visit_stats()
+
+            self.visits_today_label.config(
+                text=f"Today's Visits: {today_stats['unique_visitors_today']}"
+            )
+            self.known_customers_label.config(
+                text=f"Returning Customers: {today_stats['returning_customers_today']}"
+            )
+            self.new_customers_label.config(
+                text=f"New Customers: {today_stats['new_customers_today']}"
+            )
+            self.staff_checkins_label.config(
+                text=f"Staff Check-ins: {self.visit_counts['staff_checkins']}"
+            )
+
+            active_tracks = len(self.current_tracks) if hasattr(self, 'current_tracks') else 0
+            self.tracks_label.config(text=f"Active Tracks: {active_tracks}")
+            self.fps_label.config(text=f"FPS: {self.current_fps}")
+
+            customer_count = len(self.face_engine.customer_database) if hasattr(self.face_engine, 'customer_database') else 0
+            staff_count = len(self.face_engine.staff_database) if hasattr(self.face_engine, 'staff_database') else 0
+            self.customers_label.config(text=f"Total Customers: {customer_count}")
+            self.staff_label.config(text=f"Staff Members: {staff_count}")
 
         except Exception as e:
-            # This can happen if the window is closed while updating
-            pass
+            print(f"❌ Dashboard update error: {e}")
 
 
     def reset_visit_stats(self):
-        """Reset visit statistics"""
+        """Reset daily visit statistics"""
         try:
-            result = messagebox.askyesno("Reset Statistics",
-                                         "Are you sure you want to reset today's visit statistics?")
+            result = messagebox.askyesno(
+                "Reset Daily Stats",
+                "Are you sure you want to reset today's visit statistics?\n\n"
+                "This will clear:\n"
+                "• Today's visit counts\n"
+                "• Daily tracking records\n"
+                "• Customer visit status for today\n\n"
+                "Customer registration data will be preserved."
+            )
+
             if result:
+                today = date.today()
+
+                with self.db_manager.lock:
+                    conn = sqlite3.connect(self.db_manager.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute('DELETE FROM daily_visit_summary WHERE visit_date = ?', (today,))
+                    cursor.execute('DELETE FROM visits WHERE visit_date = ?', (today,))
+                    conn.commit()
+                    conn.close()
+
                 self.visit_counts = {
                     'total_today': 0,
                     'known_customers': 0,
@@ -1071,19 +1069,23 @@ class HotelDashboard:
                     'staff_checkins': 0
                 }
 
-                # Update display
                 self.update_realtime_dashboard()
 
-                reset_msg = f"🔄 STATISTICS RESET\n"
-                reset_msg += f"All visit counts cleared\n"
-                reset_msg += f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
-                reset_msg += "=" * 30 + "\n\n"
+                reset_msg = (
+                    f"📊 DAILY STATS RESET\n"
+                    f"Date: {today}\n"
+                    f"Time: {datetime.now().strftime('%H:%M:%S')}\n"
+                    f"All today's visit counts have been cleared\n"
+                    f"Customer database preserved\n"
+                    f"{'=' * 35}\n\n"
+                )
 
                 self.display_welcome_message(reset_msg)
-                print("✅ Visit statistics reset")
+                messagebox.showinfo("Reset Complete", "Daily visit statistics have been reset successfully!")
 
         except Exception as e:
-            print(f"❌ Reset statistics error: {e}")
+            print(f"❌ Reset stats error: {e}")
+            messagebox.showerror("Reset Error", f"Failed to reset statistics: {e}")
 
     # def test_messages(self):
     #     """Test message display functionality with comprehensive tests"""

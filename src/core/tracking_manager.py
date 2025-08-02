@@ -1,52 +1,76 @@
-# src/core/tracking_manager.py - Ultra-Optimized Tracking
-import numpy as np
-from collections import OrderedDict, deque
 import cv2
 import time
-from datetime import datetime
+from datetime import datetime, date
+
 from .deepsort_tracker import DeepSort, Detection
+from .database_manager import DatabaseManager
+from .face_engine import FaceRecognitionEngine
 
 
 class OptimizedFaceTracker:
-    COLOR_MAP = {
-        'checking': (255, 255, 0),
-        'verified_unknown': (0, 255, 255),
-        'processing_visit': (0, 255, 0),
-        'registered': (255, 0, 255),
-        'verified_known': (0, 200, 0),
-        'processing_staff_attendance': (255, 0, 0),
-        'verified_staff': (255, 100, 0)
-    }
-
     def __init__(self, track_id, bbox, embedding):
         self.track_id = track_id
         self.bbox = bbox
         self.embedding = embedding
 
-        # MODIFIED: Increased display duration for smoother coasting.
+        # Tracking properties
         self.last_seen = time.time()
         self.display_bbox = bbox
         self.display_confidence = 0.0
-        self.display_duration = 3.0  # Changed from 2.0 seconds
+        self.display_duration = 4.0
 
-        # MODIFIED: Increased stability requirement to filter noise from the more sensitive detector.
+        # Stability and recognition
         self.stability_frames = 0
-        self.min_stability = 12  # Changed from 10
+        self.min_stability = 15
         self.state_timer = time.time()
-        self.display_message = "Checking..."
+        self.display_message = "Analyzing customer..."
         self.message_time = time.time()
         self.state = "checking"
+
+        # Customer retention tracking
+        self.customer_id = None
+        self.visit_status = None
+        self.total_visits = 0
+        self.visits_today = 0
+        self.is_returning_customer = False
+        self.customer_processed = False
 
         # Recognition tracking
         self.recognition_complete = False
         self.database_checked = False
         self.visit_processed = False
-        # Count consecutive failed identification attempts
         self.fail_count = 0
 
-    def set_message(self, message):
+    def update_customer_info(self, customer_id, visit_status):
+        self.customer_id = customer_id
+        self.visit_status = visit_status
+        self.customer_processed = True
+
+        if visit_status:
+            self.total_visits = visit_status.get('total_visits', 0)
+            self.visits_today = visit_status.get('visits_today', 0)
+            self.is_returning_customer = visit_status.get('visited_today', False)
+
+            if visit_status.get('visited_today'):
+                self.set_retention_message(
+                    f"Welcome back!\nAlready counted today\nTotal visits: {self.total_visits}"
+                )
+                self.state = "already_counted_today"
+            else:
+                new_total = self.total_visits + 1
+                self.set_retention_message(
+                    f"Welcome!\nVisit #{new_total} recorded\nThank you for visiting"
+                )
+                self.state = "new_visit_recorded"
+
+    def set_retention_message(self, message, duration=4.0):
         self.display_message = message
         self.message_time = time.time()
+        self.display_duration = duration
+
+    # Compatibility alias
+    def set_message(self, message):
+        self.set_retention_message(message)
 
     @property
     def state(self):
@@ -55,96 +79,87 @@ class OptimizedFaceTracker:
     @state.setter
     def state(self, value):
         self._state = value
-        self.color = self.COLOR_MAP.get(value, (128, 128, 128))
+        color_map = {
+            'checking': (255, 255, 0),
+            'verified_unknown': (0, 255, 255),
+            'processing_customer': (0, 255, 0),
+            'new_visit_recorded': (0, 200, 0),
+            'already_counted_today': (255, 165, 0),
+            'returning_customer': (0, 150, 255),
+            'new_customer_registered': (255, 0, 255),
+        }
+        self.color = color_map.get(value, (128, 128, 128))
 
 
 class TrackingManager:
     def __init__(self, gpu_mode=True):
         self.gpu_mode = gpu_mode
         self.active_tracks = {}
-
-        # DeepSort tracker instance
         self.deepsort = DeepSort()
 
-        # Maximum allowed failed identification attempts before dropping a track
+        self.db_manager = DatabaseManager()
+        self.face_engine = FaceRecognitionEngine(gpu_mode=gpu_mode)
+
         self.max_fail_count = 3
+        self.customer_processing_timeout = 5.0
 
-    def draw_tracks(self, frame, tracks):
-        """Draw stabilized tracking boxes without blinking"""
+    def process_customer_retention(self, track):
         try:
-            current_time = time.time()
+            if (
+                not getattr(track, 'customer_processed', False)
+                and track.stability_frames >= track.min_stability
+                and hasattr(track, 'embedding')
+            ):
+                person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
 
-            for track in tracks:
-                # Only draw tracks that have been seen recently
-                if current_time - track.last_seen > track.display_duration:
-                    continue
+                if person_type == 'customer' and person_id:
+                    visit_status = self.db_manager.check_daily_visit_status(person_id)
 
-                if not hasattr(track, 'display_bbox'):
-                    continue
-
-                # ALWAYS use display_bbox for stable rendering
-                bbox = track.display_bbox
-                x1, y1, x2, y2 = [int(coord) for coord in bbox]
-
-                # Fade color for tracks that are coasting (not seen in the last second)
-                if current_time - track.last_seen > 1.0:
-                    color = tuple(int(c * 0.6) for c in track.color) if hasattr(track, 'color') else (80, 80, 80)
-                else:
-                    color = track.color if hasattr(track, 'color') else (128, 128, 128)
-
-                # Draw stable bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-                # Draw stable track info
-                info = f"ID:{track.track_id}"
-                if hasattr(track, 'confidence') and track.confidence > 0:
-                    info += f" {track.confidence:.2f}"
-
-                cv2.putText(frame, info, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-                # Draw state only after it becomes stable
-                if hasattr(track, 'state') and track.stability_frames >= track.min_stability:
-                    cv2.putText(frame, track.state.upper(), (x1, y1 - 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
-                # Draw stable message within display duration
-                if (
-                    hasattr(track, 'display_message')
-                    and track.display_message
-                    and track.stability_frames >= track.min_stability
-                ):
-                    if current_time - getattr(track, 'message_time', 0) < track.display_duration:
-                        lines = track.display_message.split('\n')[:2]
-                        for i, line in enumerate(lines):
-                            cv2.putText(
-                                frame,
-                                line,
-                                (x1, y2 + 20 + (i * 15)),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.4,
-                                color,
-                                1,
-                            )
+                    if visit_status['visited_today']:
+                        track.update_customer_info(person_id, visit_status)
+                        track.set_retention_message(
+                            f"Welcome back {person_id}!\nAlready counted today\nTotal visits: {visit_status['total_visits']}\nFirst visit today: {visit_status['first_visit_time'][:5] if visit_status['first_visit_time'] else 'N/A'}"
+                        )
                     else:
-                        track.display_message = None
+                        visit_result = self.db_manager.record_customer_visit(person_id, confidence)
+                        if visit_result['success']:
+                            track.update_customer_info(person_id, visit_result)
+                            track.set_retention_message(
+                                f"Welcome {person_id}!\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
+                            )
+                        else:
+                            track.set_retention_message("Welcome back!\nAlready processed today")
 
-            return frame
+                elif person_type == 'unknown':
+                    if track.stability_frames >= track.min_stability + 5:
+                        new_customer_id = self.face_engine.register_new_customer(track.embedding)
+                        if new_customer_id:
+                            visit_result = self.db_manager.record_customer_visit(new_customer_id, confidence)
+                            if visit_result['success']:
+                                track.update_customer_info(new_customer_id, visit_result)
+                                track.set_retention_message(
+                                    f"Welcome new customer!\nID: {new_customer_id}\nFirst visit recorded\nThank you for choosing us!"
+                                )
+                            else:
+                                track.set_retention_message("Welcome! Processing...")
+                        else:
+                            track.set_retention_message("Welcome visitor!")
+
+                track.customer_processed = True
 
         except Exception as e:
-            print(f"❌ Track drawing error: {e}")
-            return frame
+            print(f"❌ Customer retention processing error: {e}")
+            track.set_retention_message("Welcome!")
 
     def update_tracks(self, detections):
-        """Update tracking state using DeepSort."""
         current_time = time.time()
-
         try:
             ds_detections = [Detection(d['bbox'], d['embedding']) for d in detections]
             ds_tracks = self.deepsort.update(ds_detections)
 
             updated_tracks = []
             active_ids = set()
+
             for track_id, bbox, embedding in ds_tracks:
                 active_ids.add(track_id)
                 if track_id in self.active_tracks:
@@ -153,12 +168,14 @@ class TrackingManager:
                     tracker.display_bbox = bbox
                     tracker.last_seen = current_time
                     tracker.embedding = embedding
+                    tracker.stability_frames += 1
                 else:
                     tracker = OptimizedFaceTracker(track_id, bbox, embedding)
                     self.active_tracks[track_id] = tracker
+
+                self.process_customer_retention(tracker)
                 updated_tracks.append(tracker)
 
-            # Remove stale tracks
             for tid in list(self.active_tracks.keys()):
                 if tid not in active_ids:
                     del self.active_tracks[tid]
@@ -169,6 +186,51 @@ class TrackingManager:
             print(f"❌ Tracking update error: {e}")
             return list(self.active_tracks.values())
 
+    def draw_retention_info(self, frame, tracks):
+        try:
+            current_time = time.time()
+            for track in tracks:
+                if current_time - track.last_seen > track.display_duration:
+                    continue
+
+                if not hasattr(track, 'display_bbox'):
+                    continue
+
+                bbox = track.display_bbox
+                x1, y1, x2, y2 = [int(coord) for coord in bbox]
+                color = track.color if hasattr(track, 'color') else (128, 128, 128)
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                info = f"ID:{track.track_id}"
+                if hasattr(track, 'confidence') and track.confidence > 0:
+                    info += f" {track.confidence:.2f}"
+                cv2.putText(frame, info, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+                if (
+                    hasattr(track, 'display_message')
+                    and track.display_message
+                    and track.stability_frames >= track.min_stability
+                ):
+                    if current_time - getattr(track, 'message_time', 0) < track.display_duration:
+                        lines = track.display_message.split('\n')[:4]
+                        for i, line in enumerate(lines):
+                            cv2.putText(
+                                frame,
+                                line,
+                                (x1, y2 + 20 + (i * 15)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4,
+                                color,
+                                1,
+                            )
+
+            return frame
+
+        except Exception as e:
+            print(f"❌ Retention info drawing error: {e}")
+            return frame
+
     def get_track_count(self):
-        """Get number of active tracks"""
         return len(self.active_tracks)
+

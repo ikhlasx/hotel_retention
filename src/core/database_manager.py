@@ -52,21 +52,32 @@ class DatabaseManager:
                     )
                 ''')
                 
-                # Visits table
+                # Enhanced visits table with daily tracking
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS visits (
                         visit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         customer_id TEXT,
+                        visit_date DATE DEFAULT (DATE('now')),
                         visit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         confidence REAL,
-                        FOREIGN KEY (customer_id) REFERENCES customers (customer_id)
+                        is_first_visit_today BOOLEAN DEFAULT 1,
+                        FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+                        UNIQUE(customer_id, visit_date)
                     )
                 ''')
 
-                # Ensure unique visit per customer per day
+                # Daily visit summary table
                 cursor.execute('''
-                    CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_customer_date
-                    ON visits(customer_id, DATE(visit_time))
+                    CREATE TABLE IF NOT EXISTS daily_visit_summary (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        customer_id TEXT,
+                        visit_date DATE,
+                        first_visit_time TIMESTAMP,
+                        total_visits_today INTEGER DEFAULT 1,
+                        total_visits_overall INTEGER DEFAULT 1,
+                        FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
+                        UNIQUE(customer_id, visit_date)
+                    )
                 ''')
                 
                 # Staff detections table
@@ -113,6 +124,185 @@ class DatabaseManager:
         except Exception as e:
             print(f"Database initialization error: {e}")
             raise
+
+    def check_daily_visit_status(self, customer_id):
+        """Check if customer already visited today and get visit statistics"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+
+                today = date.today()
+
+                cursor.execute('''
+                    SELECT 
+                        dvs.total_visits_today,
+                        dvs.total_visits_overall,
+                        dvs.first_visit_time,
+                        c.total_visits as customer_total_visits
+                    FROM daily_visit_summary dvs
+                    JOIN customers c ON dvs.customer_id = c.customer_id
+                    WHERE dvs.customer_id = ? AND dvs.visit_date = ?
+                ''', (customer_id, today))
+
+                result = cursor.fetchone()
+                conn.close()
+
+                if result:
+                    return {
+                        'visited_today': True,
+                        'visits_today': result[0],
+                        'total_visits': result[1],
+                        'first_visit_time': result[2],
+                        'customer_total_visits': result[3]
+                    }
+
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
+                total_result = cursor.fetchone()
+                conn.close()
+
+                total = total_result[0] if total_result else 0
+                return {
+                    'visited_today': False,
+                    'visits_today': 0,
+                    'total_visits': total,
+                    'first_visit_time': None,
+                    'customer_total_visits': total
+                }
+
+        except Exception as e:
+            print(f"❌ Error checking daily visit status: {e}")
+            return {
+                'visited_today': False,
+                'visits_today': 0,
+                'total_visits': 0,
+                'first_visit_time': None,
+                'customer_total_visits': 0
+            }
+
+    def record_customer_visit(self, customer_id, confidence=1.0):
+        """Record customer visit with daily tracking and duplicate prevention"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+
+                today = date.today()
+                now = datetime.now()
+
+                cursor.execute('SELECT customer_id, total_visits FROM customers WHERE customer_id = ?', (customer_id,))
+                customer_result = cursor.fetchone()
+
+                if not customer_result:
+                    conn.close()
+                    print(f"❌ Cannot record visit: customer {customer_id} not found")
+                    return {'success': False, 'reason': 'customer_not_found'}
+
+                current_total_visits = customer_result[1]
+
+                cursor.execute('''
+                    SELECT id, total_visits_today, total_visits_overall 
+                    FROM daily_visit_summary 
+                    WHERE customer_id = ? AND visit_date = ?
+                ''', (customer_id, today))
+                daily_result = cursor.fetchone()
+
+                if daily_result:
+                    conn.close()
+                    return {
+                        'success': False,
+                        'reason': 'already_visited_today',
+                        'visits_today': daily_result[1],
+                        'total_visits': daily_result[2],
+                        'customer_id': customer_id
+                    }
+
+                new_total_visits = current_total_visits + 1
+
+                cursor.execute('''
+                    INSERT INTO visits (customer_id, visit_date, visit_time, confidence, is_first_visit_today)
+                    VALUES (?, ?, ?, ?, 1)
+                ''', (customer_id, today, now, confidence))
+
+                cursor.execute('''
+                    INSERT INTO daily_visit_summary 
+                    (customer_id, visit_date, first_visit_time, total_visits_today, total_visits_overall)
+                    VALUES (?, ?, ?, 1, ?)
+                ''', (customer_id, today, now, new_total_visits))
+
+                cursor.execute('''
+                    UPDATE customers 
+                    SET total_visits = ?, last_visit = ?
+                    WHERE customer_id = ?
+                ''', (new_total_visits, now, customer_id))
+
+                conn.commit()
+                conn.close()
+
+                return {
+                    'success': True,
+                    'reason': 'visit_recorded',
+                    'visits_today': 1,
+                    'total_visits': new_total_visits,
+                    'customer_id': customer_id,
+                    'is_new_visit': True
+                }
+
+        except Exception as e:
+            print(f"❌ Error recording customer visit: {e}")
+            return {'success': False, 'reason': 'database_error'}
+
+    def get_today_visit_stats(self):
+        """Get today's visit statistics"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+
+                today = date.today()
+
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT customer_id)
+                    FROM daily_visit_summary 
+                    WHERE visit_date = ?
+                ''', (today,))
+                unique_visitors_today = cursor.fetchone()[0]
+
+                cursor.execute('''
+                    SELECT SUM(total_visits_today) 
+                    FROM daily_visit_summary 
+                    WHERE visit_date = ?
+                ''', (today,))
+                total_visits_today = cursor.fetchone()[0] or 0
+
+                cursor.execute('''
+                    SELECT COUNT(*) 
+                    FROM customers 
+                    WHERE DATE(first_visit) = ?
+                ''', (today,))
+                new_customers_today = cursor.fetchone()[0]
+
+                returning_customers_today = unique_visitors_today - new_customers_today
+
+                conn.close()
+
+                return {
+                    'unique_visitors_today': unique_visitors_today,
+                    'total_visits_today': total_visits_today,
+                    'new_customers_today': new_customers_today,
+                    'returning_customers_today': max(0, returning_customers_today)
+                }
+
+        except Exception as e:
+            print(f"❌ Error getting today's visit stats: {e}")
+            return {
+                'unique_visitors_today': 0,
+                'total_visits_today': 0,
+                'new_customers_today': 0,
+                'returning_customers_today': 0
+            }
     
     def register_new_customer(self, embedding, image=None):
         """Register a new customer"""
@@ -169,57 +359,11 @@ class DatabaseManager:
             return False
 
     def record_visit(self, customer_id, confidence=1.0):
-        """Record a customer visit with daily duplicate prevention"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                # Verify customer exists and get current visit count
-                cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
-                row = cursor.fetchone()
-                if not row:
-                    print(f"❌ Cannot record visit: customer {customer_id} not found")
-                    conn.close()
-                    return False, 0
-                current_visits = row[0]
-
-                # Skip if already counted today
-                if not self.is_new_visit_today(customer_id):
-                    conn.close()
-                    return False, current_visits
-
-                try:
-                    cursor.execute('''
-                        INSERT INTO visits (customer_id, confidence)
-                        VALUES (?, ?)
-                    ''', (customer_id, confidence))
-                except sqlite3.IntegrityError:
-                    # Unique constraint prevented duplicate
-                    conn.close()
-                    return False, current_visits
-
-                # Update customer total visits
-                cursor.execute('''
-                    UPDATE customers
-                    SET total_visits = total_visits + 1,
-                        last_visit = CURRENT_TIMESTAMP
-                    WHERE customer_id = ?
-                ''', (customer_id,))
-
-                # Get updated visit count
-                cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
-                total_visits = cursor.fetchone()[0]
-
-                conn.commit()
-                conn.close()
-
-                print(f"✅ Visit recorded: {customer_id} (Visit #{total_visits})")
-                return True, total_visits
-
-        except Exception as e:
-            print(f"❌ Error recording visit: {e}")
-            return False, 0
+        """Compatibility wrapper for record_customer_visit"""
+        result = self.record_customer_visit(customer_id, confidence)
+        if result.get('success'):
+            return True, result.get('total_visits', 0)
+        return False, result.get('total_visits', 0)
 
     def _verify_visit_recorded(self, visit_id):
         """Verify that a visit was actually recorded in the database"""

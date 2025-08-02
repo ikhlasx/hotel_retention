@@ -352,7 +352,7 @@ class HotelDashboard:
 
                         # Process each track with visit counting
                         for track in tracks:
-                            self.process_track_with_visit_counting(track)
+                            self.process_track_with_visit_counting(track, None)
 
                         # Auto-capture on detection if enabled
                         if (self.auto_capture_var.get() and
@@ -382,8 +382,8 @@ class HotelDashboard:
                 self.update_fps()
 
                 # Update dashboard statistics every 10 frames
-                if self.frame_count % 10 == 0:
-                    self.parent.after_idle(self.update_realtime_dashboard, detections, tracks)
+                if self.frame_count % 10 == 0:  # Update every 10 frames
+                    self.parent.after_idle(self.update_realtime_dashboard)
 
                 # Sleep for stability (50 FPS max)
                 time.sleep(0.02)
@@ -409,107 +409,34 @@ class HotelDashboard:
     def draw_enhanced_overlays_stable(self, frame, detections, tracks):
         """Draw enhanced overlays with visit counts, clear bounding boxes, and stability"""
         try:
-            frame_height, frame_width = frame.shape[:2]
-
-            color_map = {
-                'checking': (255, 255, 0),
-                'verified_unknown': (0, 255, 255),
-                'processing_visit': (0, 255, 0),
-                'registered': (255, 0, 255),
-                'verified_known': (0, 200, 0),
-                'processing_staff_attendance': (255, 0, 0),
-                'verified_staff': (255, 100, 0)
-            }
-
-            # First, draw default boxes for tracks that are still being checked
-            checking_tracks = [t for t in tracks if getattr(t, "state", "") == "checking"]
-            if checking_tracks:
-                # Temporarily suppress messages for checking tracks
-                saved_messages = [getattr(t, "display_message", None) for t in checking_tracks]
-                for t in checking_tracks:
-                    t.display_message = None
-
-                if hasattr(self, "tracking_manager"):
-                    frame = self.tracking_manager.draw_tracks(frame, checking_tracks)
-                else:
-                    for t in checking_tracks:
-                        if hasattr(t, "bbox"):
-                            bbox = getattr(t, "display_bbox", t.bbox)
-                            x1, y1, x2, y2 = [int(coord) for coord in bbox]
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 128), 2)
-
-                # Restore messages (if any) for future use
-                for t, msg in zip(checking_tracks, saved_messages):
-                    t.display_message = msg
-
-            # Draw tracking boxes only for recognized individuals
+            # Draw enhanced tracking boxes with state-based colors
             for track in tracks:
                 if not hasattr(track, 'bbox'):
                     continue
 
-                # Skip tracks that are still being checked (already drawn above)
-                if getattr(track, 'state', '') == 'checking':
-                    continue
-
-                # Only display tracks that have been identified
-                if getattr(track, 'state', '') not in {
-                    'processing_visit', 'verified_known',
-                    'processing_staff_attendance', 'verified_staff'
-                }:
-                    continue
-
-                bbox = getattr(track, "display_bbox", track.bbox)
+                bbox = track.bbox
                 x1, y1, x2, y2 = [int(coord) for coord in bbox]
 
-                color = color_map.get(track.state, (128, 128, 128))
+                # Use green for verified customers/staff, yellow for checking
+                color = (0, 255, 0)  # Green for verified
+                if getattr(track, 'state', 'unknown') == 'checking':
+                    color = (0, 255, 255)  # Yellow for checking
 
-                # Draw thick tracking box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 4)
+                # Draw the bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-                # Enhanced track information
-                track_info = f"ID: {track.track_id} | {getattr(track, 'state', 'unknown')}"
-                cv2.putText(frame, track_info, (x1, y1 - 45),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-                # Confidence and stability information
-                if hasattr(track, 'confidence') and track.confidence > 0:
-                    conf_text = f"Confidence: {track.confidence:.2f}"
-                    cv2.putText(frame, conf_text, (x1, y2 + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-                if hasattr(track, 'stability_frames'):
-                    stab_text = f"Stability: {track.stability_frames}"
-                    cv2.putText(frame, stab_text, (x1, y2 + 50),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-                # Display status messages
-                if (
-                    hasattr(track, "display_message")
-                    and track.display_message
-                    and time.time() - getattr(track, "message_time", 0) < track.display_duration
-                ):
-                    lines = track.display_message.split("\n")[:2]  # Max 2 lines
+                # --- THIS IS THE KEY FIX ---
+                # Display the message associated with the track (e.g., Welcome, Visit Count)
+                if hasattr(track, 'display_message') and track.display_message:
+                    lines = track.display_message.split('\n')
                     for j, line in enumerate(lines):
-                        msg_y = y2 + 75 + (j * 25)
-                        if msg_y < frame_height - 10:
-                            cv2.putText(
-                                frame,
-                                line,
-                                (x1, msg_y),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.7,
-                                color,
-                                2,
-                            )
-                elif hasattr(track, "display_message") and track.display_message:
-                    track.display_message = None
+                        # Position text above the box
+                        msg_y = y1 - 10 - (j * 20)
+                        cv2.putText(frame, line, (x1, msg_y),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            # Draw visit counts overlay (top-left)
-            self.draw_visit_counts_overlay(frame)
-
-            # Draw system status overlay (top-right)
+            # Draw system status overlays (FPS, Time, etc.)
             self.draw_system_status_overlay(frame)
-
             return frame
 
         except Exception as e:
@@ -584,72 +511,57 @@ class HotelDashboard:
         except Exception as e:
             print(f"System status overlay error: {e}")
 
-    def process_track_with_visit_counting(self, track):
+    def process_track_with_visit_counting(self, track, detection):
         """Process track with integrated visit counting and state management"""
         try:
             current_time = time.time()
 
-            # Initialize track attributes if needed
-            if not hasattr(track, 'stability_frames'):
-                track.stability_frames = 0
+            # Initialize track attributes if not present
             if not hasattr(track, 'state'):
                 track.state = "checking"
                 track.state_timer = current_time
-            if not hasattr(track, 'fail_count'):
-                track.fail_count = 0
+                track.visit_processed = False
 
-            # State: CHECKING
-            if track.state == "checking":
-                track.stability_frames += 1
+            # State: CHECKING - Identify the person
+            if track.state == "checking" and current_time - track.state_timer > 1.0:  # Check after 1 second
+                person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
 
-                # MODIFIED: Increased stability frames for more reliable identification
-                if track.stability_frames >= 15 and current_time - track.state_timer >= 1.5: # Changed from 12
-                    # Identify person with enhanced threshold
-                    person_type, person_id, confidence = self.face_engine.identify_person(track.embedding)
-                    
-                    if person_type == 'customer' and confidence >= 0.55:
-                        track.customer_id = person_id
-                        track.confidence = confidence
-                        track.state = "processing_visit"
-                        track.state_timer = current_time
-                        track.set_message("Known customer recognized")
-                        track.fail_count = 0  # Reset on success
+                # --- THIS IS THE KEY FIX ---
+                # Known Customer Found
+                if person_type == 'customer' and confidence > 0.6:
+                    customer_info = self.face_engine.db_manager.get_customer_info(person_id)
+                    name = customer_info.get('name', f"Customer {person_id}")
+                    success, visit_count = self.face_engine.db_manager.record_visit(person_id, confidence)
 
-                    elif person_type == 'staff' and confidence >= 0.65:
-                        track.person_id = person_id
-                        track.confidence = confidence
-                        track.state = "processing_staff_attendance"
-                        track.state_timer = current_time
-                        track.set_message("Staff member detected")
-                        track.fail_count = 0  # Reset on success
+                    if success and not track.visit_processed:
+                        track.display_message = f"Welcome {name}!\nVisits: {visit_count}"
+                        self.visit_counts['known_customers'] += 1
+                        self.visit_counts['total_today'] += 1
+                        self.add_recent_detection("Known Customer", person_id, name, confidence)
+                        track.visit_processed = True
+                    track.state = "verified_known"
 
-                        # Update staff count
+                # Staff Found
+                elif person_type == 'staff' and confidence > 0.7:
+                    staff_info = self.face_engine.db_manager.get_staff_info(person_id)
+                    name = staff_info.get('name', person_id)
+                    track.display_message = f"Staff: {name}"
+                    if not track.visit_processed:
                         self.visit_counts['staff_checkins'] += 1
+                        self.add_recent_detection("Staff", person_id, name, confidence)
+                        track.visit_processed = True
+                    track.state = "verified_staff"
 
-                    else:
-                        # No match found; keep checking without triggering messages
-                        track.state = "checking"
-                        track.state_timer = current_time
-                        track.set_message(None)
-                        track.fail_count += 1
-
-                        # Drop track if it fails too many times
-                        if (
-                            self.tracking_manager
-                            and track.fail_count > self.tracking_manager.max_fail_count
-                        ):
-                            if track.track_id in self.tracking_manager.active_tracks:
-                                del self.tracking_manager.active_tracks[track.track_id]
-                            return
-
-            # State: PROCESSING_VISIT
-            elif track.state == "processing_visit" and not getattr(track, 'visit_processed', False):
-                self.process_customer_visit_with_counting(track)
-
-            # State: PROCESSING_STAFF_ATTENDANCE
-            elif track.state == "processing_staff_attendance" and not getattr(track, 'visit_processed', False):
-                self.process_staff_attendance_with_counting(track)
-
+                # New Customer (Unknown Person)
+                else:
+                    if not track.visit_processed:
+                        customer_id = self.face_engine.register_new_customer(track.embedding)
+                        track.display_message = f"Welcome! New Guest ID: {customer_id}"
+                        self.visit_counts['new_customers'] += 1
+                        self.visit_counts['total_today'] += 1
+                        self.add_recent_detection("New Customer", customer_id, "N/A", 0)
+                        track.visit_processed = True
+                    track.state = "registered"
 
         except Exception as e:
             print(f"❌ Track processing error: {e}")
@@ -1144,50 +1056,20 @@ class HotelDashboard:
             print(f"❌ Anti-flicker statistics error: {e}")
             self.update_in_progress = False
 
-    def update_realtime_dashboard(self, detections=None, tracks=None):
+    def update_realtime_dashboard(self):
         """Update dashboard UI elements with real-time data and live detections."""
         try:
-            # Update visit count displays
+            # --- THIS IS THE KEY FIX ---
+            # Update "Today's Activity" panel
             self.visits_today_label.config(text=f"Total Visits: {self.visit_counts['total_today']}")
             self.known_customers_label.config(text=f"Known Customers: {self.visit_counts['known_customers']}")
             self.new_customers_label.config(text=f"New Customers: {self.visit_counts['new_customers']}")
             self.staff_checkins_label.config(text=f"Staff Check-ins: {self.visit_counts['staff_checkins']}")
 
-            # Update system statistics if available
-            if hasattr(self, 'face_engine') and self.face_engine:
-                try:
-                    stats = self.face_engine.get_statistics()
-                    total_customers = stats.get('total_customers', 0)
-                    self.customers_label.config(text=f"Total Customers: {total_customers}")
-
-                    total_staff = stats.get('total_staff', 0)
-                    self.staff_label.config(text=f"Staff Members: {total_staff}")
-                except:
-                    pass  # Graceful fallback if statistics not available
-
-            # Auto-populate live detections from recognized tracks
-            if tracks:
-                for track in tracks:
-                    if getattr(track, 'state', '') in {
-                        'processing_visit', 'verified_known',
-                        'processing_staff_attendance', 'verified_staff'
-                    }:
-                        time_str = datetime.now().strftime('%H:%M:%S')
-                        self.recent_tree.insert('', 'end', values=(
-                            time_str,
-                            getattr(track, 'state', 'tracking'),
-                            track.track_id,
-                            f"{getattr(track, 'confidence', 0):.2f}",
-                            "Live"
-                        ))
-                # Limit treeview size
-                children = self.recent_tree.get_children()
-                if len(children) > 50:
-                    self.recent_tree.delete(children[0])
-
-
         except Exception as e:
-            print(f"❌ Dashboard update error: {e}")
+            # This can happen if the window is closed while updating
+            pass
+
 
     def reset_visit_stats(self):
         """Reset visit statistics"""

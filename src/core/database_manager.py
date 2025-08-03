@@ -1,3 +1,5 @@
+# src/core/database_manager.py - Complete Fixed Implementation
+
 import sqlite3
 import numpy as np
 import pickle
@@ -15,10 +17,14 @@ class DatabaseManager:
         
         # Initialize database
         self.init_database()
+        
+        # Fix database schema on initialization
+        self.fix_database_schema()
+        
         print(f"Database initialized at: {self.db_path}")
-    
+
     def init_database(self):
-        """Initialize database tables"""
+        """Initialize database tables with proper schema"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
@@ -52,7 +58,7 @@ class DatabaseManager:
                     )
                 ''')
                 
-                # Enhanced visits table with daily tracking
+                # Enhanced visits table with all required columns
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS visits (
                         visit_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +71,7 @@ class DatabaseManager:
                         UNIQUE(customer_id, visit_date)
                     )
                 ''')
-
+                
                 # Daily visit summary table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS daily_visit_summary (
@@ -100,7 +106,8 @@ class DatabaseManager:
                         message TEXT
                     )
                 ''')
-                # Add staff attendance table
+                
+                # Staff attendance table
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS staff_attendance (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,14 +123,137 @@ class DatabaseManager:
                         UNIQUE(staff_id, date)
                     )
                 ''')
-
+                
                 conn.commit()
                 conn.close()
-                print("Database tables created successfully")
-
+                print("✅ Database tables created successfully")
+                
         except Exception as e:
-            print(f"Database initialization error: {e}")
+            print(f"❌ Database initialization error: {e}")
             raise
+
+    def fix_database_schema(self):
+        """Fix database schema by adding missing columns"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                # Check existing columns in visits table
+                cursor.execute("PRAGMA table_info(visits)")
+                existing_columns = [row[1] for row in cursor.fetchall()]
+                print(f"Existing columns in visits table: {existing_columns}")
+                
+                # Add missing columns if they don't exist
+                missing_columns = [
+                    ('visit_date', 'DATE DEFAULT (DATE(\'now\'))'),
+                    ('visit_time', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+                    ('is_first_visit_today', 'BOOLEAN DEFAULT 1')
+                ]
+                
+                for col_name, col_def in missing_columns:
+                    if col_name not in existing_columns:
+                        print(f"Adding missing column: {col_name}")
+                        cursor.execute(f"ALTER TABLE visits ADD COLUMN {col_name} {col_def}")
+                
+                conn.commit()
+                conn.close()
+                print("✅ Database schema fixed successfully")
+                
+        except Exception as e:
+            print(f"❌ Database schema fix error: {e}")
+
+    def record_customer_visit(self, customer_id, confidence=1.0):
+        """Fixed customer visit recording with proper error handling"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                today = date.today()
+                now = datetime.now()
+                
+                # Check if customer exists
+                cursor.execute('SELECT customer_id, total_visits FROM customers WHERE customer_id = ?', (customer_id,))
+                customer_result = cursor.fetchone()
+                
+                if not customer_result:
+                    conn.close()
+                    print(f"❌ Cannot record visit: customer {customer_id} not found")
+                    return {'success': False, 'reason': 'customer_not_found'}
+                
+                current_total_visits = customer_result[1]
+                
+                # Check if already visited today
+                cursor.execute('''
+                    SELECT id, total_visits_today, total_visits_overall
+                    FROM daily_visit_summary
+                    WHERE customer_id = ? AND visit_date = ?
+                ''', (customer_id, today))
+                
+                daily_result = cursor.fetchone()
+                
+                if daily_result:
+                    conn.close()
+                    return {
+                        'success': False,
+                        'reason': 'already_visited_today',
+                        'visits_today': daily_result[1],
+                        'total_visits': daily_result[2],
+                        'customer_id': customer_id
+                    }
+                
+                new_total_visits = current_total_visits + 1
+                
+                # **FIXED: Use try-catch for insert with fallback**
+                try:
+                    # Try with all columns first
+                    cursor.execute('''
+                        INSERT INTO visits (customer_id, visit_date, visit_time, confidence, is_first_visit_today)
+                        VALUES (?, ?, ?, ?, 1)
+                    ''', (customer_id, today, now, confidence))
+                except sqlite3.OperationalError as e:
+                    if "no column named" in str(e):
+                        # Fallback: insert with basic columns only
+                        print("⚠️ Using fallback insert method for visits table")
+                        cursor.execute('''
+                            INSERT INTO visits (customer_id, confidence)
+                            VALUES (?, ?)
+                        ''', (customer_id, confidence))
+                    else:
+                        raise e
+                
+                # Insert daily summary
+                cursor.execute('''
+                    INSERT INTO daily_visit_summary
+                    (customer_id, visit_date, first_visit_time, total_visits_today, total_visits_overall)
+                    VALUES (?, ?, ?, 1, ?)
+                ''', (customer_id, today, now, new_total_visits))
+                
+                # Update customer total visits
+                cursor.execute('''
+                    UPDATE customers
+                    SET total_visits = ?, last_visit = ?
+                    WHERE customer_id = ?
+                ''', (new_total_visits, now, customer_id))
+                
+                conn.commit()
+                conn.close()
+                
+                print(f"✅ Customer visit recorded successfully: {customer_id}")
+                
+                return {
+                    'success': True,
+                    'reason': 'visit_recorded',
+                    'visits_today': 1,
+                    'total_visits': new_total_visits,
+                    'customer_id': customer_id,
+                    'is_new_visit': True
+                }
+                
+        except Exception as e:
+            print(f"❌ Error recording customer visit: {e}")
+            return {'success': False, 'reason': f'database_error: {e}'}
 
     def check_daily_visit_status(self, customer_id):
         """Check if customer already visited today and get visit statistics"""
@@ -131,11 +261,11 @@ class DatabaseManager:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-
+                
                 today = date.today()
-
+                
                 cursor.execute('''
-                    SELECT 
+                    SELECT
                         dvs.total_visits_today,
                         dvs.total_visits_overall,
                         dvs.first_visit_time,
@@ -144,11 +274,11 @@ class DatabaseManager:
                     JOIN customers c ON dvs.customer_id = c.customer_id
                     WHERE dvs.customer_id = ? AND dvs.visit_date = ?
                 ''', (customer_id, today))
-
+                
                 result = cursor.fetchone()
-                conn.close()
-
+                
                 if result:
+                    conn.close()
                     return {
                         'visited_today': True,
                         'visits_today': result[0],
@@ -156,14 +286,14 @@ class DatabaseManager:
                         'first_visit_time': result[2],
                         'customer_total_visits': result[3]
                     }
-
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
+                
+                # Get total visits from customers table if no daily record
                 cursor.execute('SELECT total_visits FROM customers WHERE customer_id = ?', (customer_id,))
                 total_result = cursor.fetchone()
                 conn.close()
-
+                
                 total = total_result[0] if total_result else 0
+                
                 return {
                     'visited_today': False,
                     'visits_today': 0,
@@ -171,7 +301,7 @@ class DatabaseManager:
                     'first_visit_time': None,
                     'customer_total_visits': total
                 }
-
+                
         except Exception as e:
             print(f"❌ Error checking daily visit status: {e}")
             return {
@@ -182,130 +312,8 @@ class DatabaseManager:
                 'customer_total_visits': 0
             }
 
-    def record_customer_visit(self, customer_id, confidence=1.0):
-        """Record customer visit with daily tracking and duplicate prevention"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                today = date.today()
-                now = datetime.now()
-
-                cursor.execute('SELECT customer_id, total_visits FROM customers WHERE customer_id = ?', (customer_id,))
-                customer_result = cursor.fetchone()
-
-                if not customer_result:
-                    conn.close()
-                    print(f"❌ Cannot record visit: customer {customer_id} not found")
-                    return {'success': False, 'reason': 'customer_not_found'}
-
-                current_total_visits = customer_result[1]
-
-                cursor.execute('''
-                    SELECT id, total_visits_today, total_visits_overall 
-                    FROM daily_visit_summary 
-                    WHERE customer_id = ? AND visit_date = ?
-                ''', (customer_id, today))
-                daily_result = cursor.fetchone()
-
-                if daily_result:
-                    conn.close()
-                    return {
-                        'success': False,
-                        'reason': 'already_visited_today',
-                        'visits_today': daily_result[1],
-                        'total_visits': daily_result[2],
-                        'customer_id': customer_id
-                    }
-
-                new_total_visits = current_total_visits + 1
-
-                cursor.execute('''
-                    INSERT INTO visits (customer_id, visit_date, visit_time, confidence, is_first_visit_today)
-                    VALUES (?, ?, ?, ?, 1)
-                ''', (customer_id, today, now, confidence))
-
-                cursor.execute('''
-                    INSERT INTO daily_visit_summary 
-                    (customer_id, visit_date, first_visit_time, total_visits_today, total_visits_overall)
-                    VALUES (?, ?, ?, 1, ?)
-                ''', (customer_id, today, now, new_total_visits))
-
-                cursor.execute('''
-                    UPDATE customers 
-                    SET total_visits = ?, last_visit = ?
-                    WHERE customer_id = ?
-                ''', (new_total_visits, now, customer_id))
-
-                conn.commit()
-                conn.close()
-
-                return {
-                    'success': True,
-                    'reason': 'visit_recorded',
-                    'visits_today': 1,
-                    'total_visits': new_total_visits,
-                    'customer_id': customer_id,
-                    'is_new_visit': True
-                }
-
-        except Exception as e:
-            print(f"❌ Error recording customer visit: {e}")
-            return {'success': False, 'reason': 'database_error'}
-
-    def get_today_visit_stats(self):
-        """Get today's visit statistics"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                today = date.today()
-
-                cursor.execute('''
-                    SELECT COUNT(DISTINCT customer_id)
-                    FROM daily_visit_summary 
-                    WHERE visit_date = ?
-                ''', (today,))
-                unique_visitors_today = cursor.fetchone()[0]
-
-                cursor.execute('''
-                    SELECT SUM(total_visits_today) 
-                    FROM daily_visit_summary 
-                    WHERE visit_date = ?
-                ''', (today,))
-                total_visits_today = cursor.fetchone()[0] or 0
-
-                cursor.execute('''
-                    SELECT COUNT(*) 
-                    FROM customers 
-                    WHERE DATE(first_visit) = ?
-                ''', (today,))
-                new_customers_today = cursor.fetchone()[0]
-
-                returning_customers_today = unique_visitors_today - new_customers_today
-
-                conn.close()
-
-                return {
-                    'unique_visitors_today': unique_visitors_today,
-                    'total_visits_today': total_visits_today,
-                    'new_customers_today': new_customers_today,
-                    'returning_customers_today': max(0, returning_customers_today)
-                }
-
-        except Exception as e:
-            print(f"❌ Error getting today's visit stats: {e}")
-            return {
-                'unique_visitors_today': 0,
-                'total_visits_today': 0,
-                'new_customers_today': 0,
-                'returning_customers_today': 0
-            }
-    
     def register_new_customer(self, embedding, image=None):
-        """Register a new customer"""
+        """Register a new customer with proper embedding storage"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
@@ -327,21 +335,22 @@ class DatabaseManager:
                 conn.commit()
                 conn.close()
                 
-                print(f"New customer registered: {customer_id}")
+                print(f"✅ New customer registered: {customer_id}")
                 return customer_id
                 
         except Exception as e:
-            print(f"Error registering customer: {e}")
+            print(f"❌ Error registering customer: {e}")
             return None
-    
+
     def add_staff_member(self, staff_id, name, department, embedding, image=None):
-        """Add a staff member"""
+        """Add a staff member with proper embedding storage"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                embedding_blob = embedding.tobytes() if embedding is not None else None
+                # Store embedding properly
+                embedding_blob = pickle.dumps(embedding.astype(np.float32)) if embedding is not None else None
                 
                 cursor.execute('''
                     INSERT OR REPLACE INTO staff (staff_id, name, department, embedding)
@@ -351,60 +360,70 @@ class DatabaseManager:
                 conn.commit()
                 conn.close()
                 
-                print(f"Staff member added: {staff_id} - {name}")
+                print(f"✅ Staff member added: {staff_id} - {name}")
                 return True
                 
         except Exception as e:
-            print(f"Error adding staff member: {e}")
+            print(f"❌ Error adding staff member: {e}")
             return False
 
-    def record_visit(self, customer_id, confidence=1.0):
-        """Compatibility wrapper for record_customer_visit"""
-        result = self.record_customer_visit(customer_id, confidence)
-        if result.get('success'):
-            return True, result.get('total_visits', 0)
-        return False, result.get('total_visits', 0)
-
-    def _verify_visit_recorded(self, visit_id):
-        """Verify that a visit was actually recorded in the database"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                cursor.execute('SELECT visit_id FROM visits WHERE visit_id = ?', (visit_id,))
-                result = cursor.fetchone()
-
-                conn.close()
-                return result is not None
-
-        except Exception as e:
-            print(f"Visit verification error: {e}")
-            return False
-
-    def record_staff_detection(self, staff_id, confidence=1.0):
-        """Record a staff detection"""
+    def load_customers(self):
+        """Load all active customers and their embeddings"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                cursor.execute('''
-                    INSERT INTO staff_detections (staff_id, confidence)
-                    VALUES (?, ?)
-                ''', (staff_id, confidence))
+                cursor.execute("SELECT customer_id, embedding FROM customers WHERE is_active = 1 AND embedding IS NOT NULL")
+                customers = []
                 
-                conn.commit()
+                for row in cursor.fetchall():
+                    customer_id, embedding_blob = row
+                    try:
+                        embedding = pickle.loads(embedding_blob)
+                        customers.append({'id': customer_id, 'embedding': embedding})
+                    except Exception as e:
+                        print(f"⚠️ Error loading embedding for customer {customer_id}: {e}")
+                        continue
+                
                 conn.close()
-                
-                return True
+                print(f"✅ Loaded {len(customers)} customers")
+                return customers
                 
         except Exception as e:
-            print(f"Error recording staff detection: {e}")
-            return False
-    
+            print(f"❌ Error loading customers: {e}")
+            return []
+
+    def load_staff(self):
+        """Load all active staff and their embeddings"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT staff_id, embedding FROM staff WHERE is_active = 1 AND embedding IS NOT NULL")
+                staff = []
+                
+                for row in cursor.fetchall():
+                    staff_id, embedding_blob = row
+                    try:
+                        if embedding_blob:
+                            embedding = pickle.loads(embedding_blob)
+                            staff.append({'id': staff_id, 'embedding': embedding})
+                    except Exception as e:
+                        print(f"⚠️ Error loading embedding for staff {staff_id}: {e}")
+                        continue
+                
+                conn.close()
+                print(f"✅ Loaded {len(staff)} staff members")
+                return staff
+                
+        except Exception as e:
+            print(f"❌ Error loading staff: {e}")
+            return []
+
     def get_all_customers(self):
-        """Get all customers"""
+        """Get all customers with detailed information"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
@@ -430,33 +449,11 @@ class DatabaseManager:
                 return customers
                 
         except Exception as e:
-            print(f"Error getting customers: {e}")
+            print(f"❌ Error getting customers: {e}")
             return []
 
-    def load_customers(self):
-        """Load all active customers and their embeddings"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                
-                cursor.execute("SELECT customer_id, embedding FROM customers WHERE is_active = 1 AND embedding IS NOT NULL")
-                
-                customers = []
-                for row in cursor.fetchall():
-                    customer_id, embedding_blob = row
-                    embedding = pickle.loads(embedding_blob)
-                    customers.append({'id': customer_id, 'embedding': embedding})
-                
-                conn.close()
-                return customers
-                
-        except Exception as e:
-            print(f"Error loading customers: {e}")
-            return []
-    
     def get_all_staff(self):
-        """Get all staff members"""
+        """Get all staff members with detailed information"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
@@ -481,9 +478,9 @@ class DatabaseManager:
                 return staff_members
                 
         except Exception as e:
-            print(f"Error getting staff: {e}")
+            print(f"❌ Error getting staff: {e}")
             return []
-    
+
     def get_customer_info(self, customer_id):
         """Get customer information"""
         try:
@@ -506,13 +503,12 @@ class DatabaseManager:
                         'total_visits': row[2],
                         'last_visit': row[3]
                     }
-                
                 return None
                 
         except Exception as e:
-            print(f"Error getting customer info: {e}")
+            print(f"❌ Error getting customer info: {e}")
             return None
-    
+
     def get_staff_info(self, staff_id):
         """Get staff information"""
         try:
@@ -534,113 +530,153 @@ class DatabaseManager:
                         'name': row[1],
                         'department': row[2]
                     }
-                
                 return None
                 
         except Exception as e:
-            print(f"Error getting staff info: {e}")
+            print(f"❌ Error getting staff info: {e}")
             return None
-    
-    def is_new_visit_today(self, customer_id):
-        """Check if this is a new visit today"""
+
+    def record_staff_detection(self, staff_id, confidence=1.0):
+        """Record a staff detection"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    SELECT COUNT(*) FROM visits 
-                    WHERE customer_id = ? AND DATE(visit_time) = DATE('now')
-                ''', (customer_id,))
+                    INSERT INTO staff_detections (staff_id, confidence)
+                    VALUES (?, ?)
+                ''', (staff_id, confidence))
                 
-                count = cursor.fetchone()[0]
+                conn.commit()
                 conn.close()
+                return True
                 
-                return count == 0
-                
         except Exception as e:
-            print(f"Error checking visit: {e}")
-            return True
+            print(f"❌ Error recording staff detection: {e}")
+            return False
 
-    def get_daily_visits(self, date):
-        """Get all visits for a specific date"""
-        try:
-            query = """
-            SELECT v.*, c.customer_id, c.name 
-            FROM visits v
-            LEFT JOIN customers c ON v.customer_id = c.customer_id
-            WHERE DATE(v.timestamp) = ?
-            ORDER BY v.timestamp DESC
-            """
-
-            result = self.execute_query(query, (date.strftime('%Y-%m-%d'),), fetch=True)
-
-            visits = []
-            for row in result:
-                visits.append({
-                    'visit_id': row[0],
-                    'customer_id': row[1],
-                    'timestamp': row[2],
-                    'confidence': row[3],
-                    'name': row[5] if len(row) > 5 else None
-                })
-
-            return visits
-
-        except Exception as e:
-            print(f"Error getting daily visits: {e}")
-            return []
-
-    def get_customer_visits(self, customer_id):
-        """Get all visits for a specific customer"""
-        try:
-            query = """
-            SELECT * FROM visits 
-            WHERE customer_id = ?
-            ORDER BY timestamp DESC
-            """
-
-            result = self.execute_query(query, (customer_id,), fetch=True)
-            return result if result else []
-
-        except Exception as e:
-            print(f"Error getting customer visits: {e}")
-            return []
-
-    def get_daily_staff_detections(self, target_date=None):
-        """Get daily staff detections"""
-        if target_date is None:
-            target_date = date.today()
-        
+    def record_staff_attendance(self, staff_id, attendance_type='check_in', confidence=1.0):
+        """Record staff check-in or check-out and return status information"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                cursor.execute('''
-                    SELECT sd.detection_time, sd.staff_id, s.name, s.department
-                    FROM staff_detections sd
-                    JOIN staff s ON sd.staff_id = s.staff_id
-                    WHERE DATE(sd.detection_time) = ?
-                    ORDER BY sd.detection_time
-                ''', (target_date,))
+                current_date = date.today()
+                current_time = datetime.now().time()
+                already_checked_in = False
                 
-                detections = []
-                for row in cursor.fetchall():
-                    detections.append({
-                        'detection_time': datetime.fromisoformat(row[0]),
-                        'staff_id': row[1],
-                        'staff_name': row[2],
-                        'department': row[3]
-                    })
+                if attendance_type == 'check_in':
+                    # Check if already checked in today
+                    cursor.execute(
+                        "SELECT id FROM staff_attendance WHERE staff_id = ? AND date = ?",
+                        (staff_id, current_date)
+                    )
+                    existing = cursor.fetchone()
+                    
+                    if existing:
+                        already_checked_in = True
+                        # Update existing record
+                        cursor.execute('''
+                            UPDATE staff_attendance
+                            SET check_in_time = ?, recognition_confidence = ?
+                            WHERE staff_id = ? AND date = ?
+                        ''', (current_time, confidence, staff_id, current_date))
+                    else:
+                        # Insert new record
+                        status = 'Late' if current_time > datetime.strptime('09:00:00', '%H:%M:%S').time() else 'Present'
+                        cursor.execute('''
+                            INSERT INTO staff_attendance (staff_id, date, check_in_time, status, recognition_confidence)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (staff_id, current_date, current_time, status, confidence))
                 
+                elif attendance_type == 'check_out':
+                    # Update check-out time and calculate hours
+                    cursor.execute('''
+                        UPDATE staff_attendance
+                        SET check_out_time = ?,
+                            hours_worked = CASE
+                                WHEN check_in_time IS NOT NULL THEN
+                                    (julianday(date || ' ' || ?) - julianday(date || ' ' || check_in_time)) * 24
+                                ELSE 0
+                            END
+                        WHERE staff_id = ? AND date = ?
+                    ''', (current_time, current_time, staff_id, current_date))
+                
+                # Get total visits for staff member
+                cursor.execute(
+                    "SELECT COUNT(*) FROM staff_attendance WHERE staff_id = ?",
+                    (staff_id,)
+                )
+                total_visits = cursor.fetchone()[0]
+                
+                conn.commit()
                 conn.close()
-                return detections
+                
+                return {
+                    'success': True,
+                    'already_checked_in': already_checked_in,
+                    'total_visits': total_visits
+                }
                 
         except Exception as e:
-            print(f"Error getting staff detections: {e}")
-            return []
-    
+            print(f"❌ Error recording staff attendance: {e}")
+            return {'success': False, 'already_checked_in': False, 'total_visits': 0}
+
+    def get_today_visit_stats(self):
+        """Get today's visit statistics"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                today = date.today()
+                
+                # Unique visitors today
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT customer_id)
+                    FROM daily_visit_summary
+                    WHERE visit_date = ?
+                ''', (today,))
+                unique_visitors_today = cursor.fetchone()[0]
+                
+                # Total visits today
+                cursor.execute('''
+                    SELECT SUM(total_visits_today)
+                    FROM daily_visit_summary
+                    WHERE visit_date = ?
+                ''', (today,))
+                total_visits_today = cursor.fetchone()[0] or 0
+                
+                # New customers today
+                cursor.execute('''
+                    SELECT COUNT(*)
+                    FROM customers
+                    WHERE DATE(first_visit) = ?
+                ''', (today,))
+                new_customers_today = cursor.fetchone()[0]
+                
+                returning_customers_today = unique_visitors_today - new_customers_today
+                
+                conn.close()
+                
+                return {
+                    'unique_visitors_today': unique_visitors_today,
+                    'total_visits_today': total_visits_today,
+                    'new_customers_today': new_customers_today,
+                    'returning_customers_today': max(0, returning_customers_today)
+                }
+                
+        except Exception as e:
+            print(f"❌ Error getting today's visit stats: {e}")
+            return {
+                'unique_visitors_today': 0,
+                'total_visits_today': 0,
+                'new_customers_today': 0,
+                'returning_customers_today': 0
+            }
+
     def get_monthly_statistics(self, year, month):
         """Get monthly statistics"""
         try:
@@ -650,21 +686,21 @@ class DatabaseManager:
                 
                 # Total visits in month
                 cursor.execute('''
-                    SELECT COUNT(*) FROM visits 
+                    SELECT COUNT(*) FROM visits
                     WHERE strftime('%Y', visit_time) = ? AND strftime('%m', visit_time) = ?
                 ''', (str(year), f"{month:02d}"))
                 total_visits = cursor.fetchone()[0]
                 
                 # Unique customers in month
                 cursor.execute('''
-                    SELECT COUNT(DISTINCT customer_id) FROM visits 
+                    SELECT COUNT(DISTINCT customer_id) FROM visits
                     WHERE strftime('%Y', visit_time) = ? AND strftime('%m', visit_time) = ?
                 ''', (str(year), f"{month:02d}"))
                 unique_customers = cursor.fetchone()[0]
                 
                 # New customers in month
                 cursor.execute('''
-                    SELECT COUNT(*) FROM customers 
+                    SELECT COUNT(*) FROM customers
                     WHERE strftime('%Y', first_visit) = ? AND strftime('%m', first_visit) = ?
                 ''', (str(year), f"{month:02d}"))
                 new_customers = cursor.fetchone()[0]
@@ -680,7 +716,7 @@ class DatabaseManager:
                 }
                 
         except Exception as e:
-            print(f"Error getting monthly statistics: {e}")
+            print(f"❌ Error getting monthly statistics: {e}")
             return {
                 'total_visits': 0,
                 'unique_customers': 0,
@@ -688,213 +724,24 @@ class DatabaseManager:
                 'avg_visits_per_day': 0.0,
                 'daily_breakdown': []
             }
-    
-    def test_database_connection(self):
-        """Test database connection and tables"""
+
+    def delete_staff_member(self, staff_id):
+        """Delete a staff member"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
-                # Check if tables exist
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                tables = cursor.fetchall()
+                cursor.execute("DELETE FROM staff WHERE staff_id = ?", (staff_id,))
                 
-                print(f"Database tables: {[table[0] for table in tables]}")
-                
-                # Check customer count
-                cursor.execute("SELECT COUNT(*) FROM customers")
-                customer_count = cursor.fetchone()[0]
-                
-                # Check staff count
-                cursor.execute("SELECT COUNT(*) FROM staff")
-                staff_count = cursor.fetchone()[0]
-                
-                print(f"Customers: {customer_count}, Staff: {staff_count}")
-                
+                conn.commit()
                 conn.close()
+                
+                print(f"✅ Staff member deleted: {staff_id}")
                 return True
                 
         except Exception as e:
-            print(f"Database test failed: {e}")
-            return False
-# Add these compatibility methods at the end of your DatabaseManager class
-    def create_staff_attendance_table(self):
-        """Create staff attendance tracking table"""
-        query = """
-        CREATE TABLE IF NOT EXISTS staff_attendance (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            staff_id TEXT NOT NULL,
-            date DATE NOT NULL,
-            check_in_time TIME,
-            check_out_time TIME,
-            hours_worked REAL DEFAULT 0,
-            status TEXT DEFAULT 'Present',
-            recognition_confidence REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (staff_id) REFERENCES staff_members (staff_id),
-            UNIQUE(staff_id, date)
-        )
-        """
-        self.execute_query(query)
-
-
-    def record_staff_attendance(self, staff_id, attendance_type='check_in', confidence=1.0):
-        """Record staff check-in or check-out and return status information"""
-        try:
-            current_date = date.today().strftime('%Y-%m-%d')
-            current_time = datetime.now().strftime('%H:%M:%S')
-
-            already_checked_in = False
-
-            if attendance_type == 'check_in':
-                # Check if already checked in today
-                existing = self.execute_query(
-                    "SELECT id FROM staff_attendance WHERE staff_id = ? AND date = ?",
-                    (staff_id, current_date), fetch=True
-                )
-
-                if existing:
-                    already_checked_in = True
-                    # Update existing record
-                    query = """
-                    UPDATE staff_attendance
-                    SET check_in_time = ?, recognition_confidence = ?
-                    WHERE staff_id = ? AND date = ?
-                    """
-                    self.execute_query(query, (current_time, confidence, staff_id, current_date))
-                else:
-                    # Insert new record
-                    status = 'Late' if datetime.now().time() > datetime.strptime('09:00:00',
-                                                                                 '%H:%M:%S').time() else 'Present'
-                    query = """
-                    INSERT INTO staff_attendance (staff_id, date, check_in_time, status, recognition_confidence)
-                    VALUES (?, ?, ?, ?, ?)
-                    """
-                    self.execute_query(query, (staff_id, current_date, current_time, status, confidence))
-
-            elif attendance_type == 'check_out':
-                # Update check-out time and calculate hours
-                query = """
-                UPDATE staff_attendance
-                SET check_out_time = ?,
-                    hours_worked = CASE
-                        WHEN check_in_time IS NOT NULL THEN
-                            (julianday(date || ' ' || ?) - julianday(date || ' ' || check_in_time)) * 24
-                        ELSE 0
-                    END
-                WHERE staff_id = ? AND date = ?
-                """
-                self.execute_query(query, (current_time, current_time, staff_id, current_date))
-
-            # Get total visits for staff member
-            total_visits_result = self.execute_query(
-                "SELECT COUNT(*) FROM staff_attendance WHERE staff_id = ?",
-                (staff_id,), fetch=True
-            )
-            total_visits = total_visits_result[0][0] if total_visits_result else 0
-
-            return {
-                'success': True,
-                'already_checked_in': already_checked_in,
-                'total_visits': total_visits
-            }
-
-        except Exception as e:
-            print(f"Error recording staff attendance: {e}")
-            return {'success': False, 'already_checked_in': False, 'total_visits': 0}
-
-
-    def get_staff_attendance_report(self, start_date, end_date):
-        """Get staff attendance report for date range"""
-        query = """
-        SELECT 
-            sm.staff_id,
-            sm.name,
-            sm.department,
-            COUNT(sa.date) as total_days,
-            SUM(CASE WHEN sa.status IN ('Present', 'Late') THEN 1 ELSE 0 END) as present_days,
-            SUM(CASE WHEN sa.status = 'Absent' THEN 1 ELSE 0 END) as absent_days,
-            SUM(CASE WHEN sa.status = 'Late' THEN 1 ELSE 0 END) as late_days,
-            AVG(sa.hours_worked) as avg_hours_per_day,
-            ROUND(
-                (SUM(CASE WHEN sa.status IN ('Present', 'Late') THEN 1 ELSE 0 END) * 100.0 / COUNT(*)), 2
-            ) as attendance_percentage
-        FROM staff_members sm
-        LEFT JOIN staff_attendance sa ON sm.staff_id = sa.staff_id 
-            AND sa.date BETWEEN ? AND ?
-        GROUP BY sm.staff_id, sm.name, sm.department
-        ORDER BY attendance_percentage DESC
-        """
-        return self.execute_query(query, (start_date, end_date), fetch=True)
-
-
-    def load_customers(self):
-        """Compatibility alias for get_all_customers"""
-        print("🔄 Loading customers via alias method...")
-        return self.get_all_customers()
-
-    def execute_query(self, query, params=None, fetch=False):
-        """Execute SQL query with proper error handling"""
-        try:
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                if params:
-                    cursor.execute(query, params)
-                else:
-                    cursor.execute(query)
-
-                if fetch:
-                    result = cursor.fetchall()
-                    conn.close()
-                    return result
-                else:
-                    conn.commit()
-                    conn.close()
-                    return True
-
-        except Exception as e:
-            print(f"Database query error: {e}")
-            if 'conn' in locals():
-                conn.close()
-            return False if not fetch else []
-
-    def get_database_stats(self):
-        """Get current database statistics"""
-        try:
-            stats = {}
-            tables = ['customers', 'visits', 'staff_detections', 'staff', 'staff_attendance']
-
-            with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-
-                for table in tables:
-                    try:
-                        cursor.execute(f'SELECT COUNT(*) FROM {table}')
-                        count = cursor.fetchone()[0]
-                        stats[table] = count
-                    except sqlite3.OperationalError:
-                        stats[table] = 'Table not found'
-
-                conn.close()
-                return stats
-
-        except Exception as e:
-            print(f"Error getting database stats: {e}")
-            return {}
-
-    def delete_staff_member(self, staff_id):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM staff WHERE staff_id = ?", (staff_id,))
-            conn.commit()
-            conn.close()
-            return True
-        except:
+            print(f"❌ Error deleting staff member: {e}")
             return False
 
     def reset_recognition_data(self):
@@ -905,74 +752,172 @@ class DatabaseManager:
             backup_path = f"{self.db_path}.backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             shutil.copy2(self.db_path, backup_path)
             print(f"✅ Backup created: {backup_path}")
-
+            
             # Tables to reset (keep structure, clear data)
             tables_to_reset = [
                 'customers',
                 'visits',
                 'staff_detections',
-                'staff_attendance'
+                'staff_attendance',
+                'daily_visit_summary'
             ]
-
+            
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-
+                
                 # Disable foreign key constraints temporarily
                 cursor.execute('PRAGMA foreign_keys = OFF')
-
+                
                 for table in tables_to_reset:
                     try:
                         # Clear all data
                         cursor.execute(f'DELETE FROM {table}')
-
                         # Reset auto-increment
                         cursor.execute(f'DELETE FROM sqlite_sequence WHERE name = ?', (table,))
-
                         print(f"✅ Reset table: {table}")
-
                     except sqlite3.OperationalError as e:
                         if "no such table" not in str(e).lower():
-                            print(f"⚠️  Could not reset {table}: {e}")
-
+                            print(f"⚠️ Could not reset {table}: {e}")
+                
                 # Re-enable foreign key constraints
                 cursor.execute('PRAGMA foreign_keys = ON')
-
+                
                 conn.commit()
                 conn.close()
-
+                
             print("🎉 Recognition data reset successfully!")
             return True
-
+            
         except Exception as e:
             print(f"❌ Database reset failed: {e}")
             return False
 
-    def load_staff(self):
-        """Load all active staff and their embeddings"""
+    def test_database_connection(self):
+        """Test database connection and tables"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-
-                cursor.execute("SELECT staff_id, embedding FROM staff WHERE is_active = 1 AND embedding IS NOT NULL")
-
-                staff = []
-                for row in cursor.fetchall():
-                    staff_id, embedding_blob = row
-                    if embedding_blob:
-                        embedding = np.frombuffer(embedding_blob, dtype=np.float32)
-                        staff.append({'id': staff_id, 'embedding': embedding})
-
+                
+                # Check if tables exist
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = cursor.fetchall()
+                print(f"Database tables: {[table[0] for table in tables]}")
+                
+                # Check customer count
+                cursor.execute("SELECT COUNT(*) FROM customers")
+                customer_count = cursor.fetchone()[0]
+                
+                # Check staff count
+                cursor.execute("SELECT COUNT(*) FROM staff")
+                staff_count = cursor.fetchone()[0]
+                
+                # Check visits count
+                cursor.execute("SELECT COUNT(*) FROM visits")
+                visits_count = cursor.fetchone()[0]
+                
+                print(f"Database Stats - Customers: {customer_count}, Staff: {staff_count}, Visits: {visits_count}")
+                
                 conn.close()
-                return staff
-
+                return True
+                
         except Exception as e:
-            print(f"Error loading staff: {e}")
-            return []
+            print(f"❌ Database test failed: {e}")
+            return False
 
+    def get_database_stats(self):
+        """Get current database statistics"""
+        try:
+            stats = {}
+            tables = ['customers', 'visits', 'staff_detections', 'staff', 'staff_attendance', 'daily_visit_summary']
+            
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                for table in tables:
+                    try:
+                        cursor.execute(f'SELECT COUNT(*) FROM {table}')
+                        count = cursor.fetchone()[0]
+                        stats[table] = count
+                    except sqlite3.OperationalError:
+                        stats[table] = 'Table not found'
+                
+                conn.close()
+                
+            return stats
+            
+        except Exception as e:
+            print(f"❌ Error getting database stats: {e}")
+            return {}
+
+    def execute_query(self, query, params=None, fetch=False):
+        """Execute SQL query with proper error handling"""
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                
+                if fetch:
+                    result = cursor.fetchall()
+                    conn.close()
+                    return result
+                else:
+                    conn.commit()
+                    conn.close()
+                    return True
+                    
+        except Exception as e:
+            print(f"❌ Database query error: {e}")
+            if 'conn' in locals():
+                conn.close()
+            return False if not fetch else []
+
+    # Compatibility methods
+    def record_visit(self, customer_id, confidence=1.0):
+        """Compatibility wrapper for record_customer_visit"""
+        result = self.record_customer_visit(customer_id, confidence)
+        if result.get('success'):
+            return True, result.get('total_visits', 0)
+        return False, result.get('total_visits', 0)
+
+    def is_new_visit_today(self, customer_id):
+        """Check if this is a new visit today"""
+        visit_status = self.check_daily_visit_status(customer_id)
+        return not visit_status['visited_today']
 
 # Test the database manager if run directly
 if __name__ == "__main__":
+    print("🧪 Testing Database Manager...")
     db = DatabaseManager()
-    db.test_database_connection()
+    
+    # Test connection
+    if db.test_database_connection():
+        print("✅ Database connection test passed")
+        
+        # Test stats
+        stats = db.get_database_stats()
+        print(f"📊 Database statistics: {stats}")
+        
+        # Test customer registration
+        test_embedding = np.random.rand(512).astype(np.float32)
+        customer_id = db.register_new_customer(test_embedding)
+        if customer_id:
+            print(f"✅ Test customer registered: {customer_id}")
+            
+            # Test visit recording
+            result = db.record_customer_visit(customer_id, 0.95)
+            if result['success']:
+                print(f"✅ Test visit recorded successfully")
+            else:
+                print(f"⚠️ Visit recording result: {result}")
+        
+        print("🎉 All tests completed!")
+    else:
+        print("❌ Database connection test failed")

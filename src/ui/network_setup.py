@@ -87,10 +87,33 @@ class NetworkSetupWindow:
         
         self.camera_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=5)
         camera_scroll.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
-        
+
         # Bind camera selection
         self.camera_tree.bind('<<TreeviewSelect>>', self.on_camera_selected)
-        
+
+        # Network Interface Settings
+        network_frame = ttk.LabelFrame(main_frame, text="🌐 Network Interfaces", padding=10)
+        network_frame.pack(fill=tk.X, pady=(0, 10))
+
+        interface_grid = ttk.Frame(network_frame)
+        interface_grid.pack(fill=tk.X, pady=5)
+
+        ttk.Label(interface_grid, text="Ethernet IP:").grid(row=0, column=0, sticky=tk.W)
+        self.ethernet_ip_var = tk.StringVar(value="192.168.1.100")
+        ttk.Entry(interface_grid, textvariable=self.ethernet_ip_var, width=18).grid(row=0, column=1, padx=5, pady=2)
+
+        ttk.Label(interface_grid, text="WiFi IP:").grid(row=1, column=0, sticky=tk.W)
+        self.wifi_ip_var = tk.StringVar(value="192.168.1.100")
+        ttk.Entry(interface_grid, textvariable=self.wifi_ip_var, width=18).grid(row=1, column=1, padx=5, pady=2)
+
+        ttk.Label(interface_grid, text="Preferred:").grid(row=0, column=2, padx=(20,5), sticky=tk.W)
+        self.connection_type_var = tk.StringVar(value="ethernet")
+        pref_combo = ttk.Combobox(interface_grid, textvariable=self.connection_type_var,
+                                  values=["ethernet", "wifi"], width=12, state="readonly")
+        pref_combo.grid(row=0, column=3, padx=5)
+
+        ttk.Button(network_frame, text="Check Network", command=self.check_network).pack(anchor=tk.E, pady=5)
+
         # Camera Configuration Section
         config_frame = ttk.LabelFrame(main_frame, text="⚙️ Camera Configuration", padding=10)
         config_frame.pack(fill=tk.X, pady=(0, 10))
@@ -292,6 +315,26 @@ class NetworkSetupWindow:
         except Exception as e:
             self.rtsp_url_var.set("Invalid configuration")
 
+    def check_network(self):
+        """Ping the selected network IP"""
+        try:
+            ip = self.ethernet_ip_var.get() if self.connection_type_var.get() == "ethernet" else self.wifi_ip_var.get()
+            if not ip:
+                messagebox.showwarning("Network Test", "No IP address specified.")
+                return
+
+            param = "-n" if platform.system().lower() == "windows" else "-c"
+            result = subprocess.run(["ping", param, "1", ip], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.returncode == 0:
+                self.log_status(f"✅ Network reachable: {ip}")
+                messagebox.showinfo("Network Test", f"✅ {ip} is reachable")
+            else:
+                self.log_status(f"❌ Network unreachable: {ip}")
+                messagebox.showerror("Network Test", f"❌ {ip} is unreachable")
+        except Exception as e:
+            self.log_status(f"❌ Network test error: {e}")
+            messagebox.showerror("Network Test", f"❌ Test failed: {e}")
+
     def test_camera_connection(self):
         """Test camera connection with current settings"""
         try:
@@ -403,13 +446,16 @@ class NetworkSetupWindow:
         """Load current network settings"""
         try:
             settings = self.config.get_network_settings()
-            
+            self.ethernet_ip_var.set(settings.get('ethernet_ip', ''))
+            self.wifi_ip_var.set(settings.get('wifi_ip', ''))
+            self.connection_type_var.set(settings.get('preferred_connection', 'ethernet'))
+
             # Load camera settings
             camera_settings = self.config.get_camera_settings()
-            
+
             if 'rtsp_url' in camera_settings:
                 rtsp_url = camera_settings['rtsp_url']
-                
+
                 # Parse RTSP URL to extract components
                 if '://' in rtsp_url and '@' in rtsp_url:
                     try:
@@ -421,7 +467,7 @@ class NetworkSetupWindow:
                                 username, password = auth_part.split(':', 1)
                                 self.username_var.set(username)
                                 self.password_var.set(password)
-                            
+
                             if ':' in location_part:
                                 ip_part = location_part.split(':')[0]
                                 port_part = location_part.split(':')[1].split('/')[0]
@@ -429,7 +475,7 @@ class NetworkSetupWindow:
                                 self.port_var.set(port_part)
                     except:
                         pass
-            
+
             self.update_rtsp_url()
             
         except Exception as e:
@@ -447,13 +493,13 @@ class NetworkSetupWindow:
             
             # Prepare network settings
             network_settings = {
-                'ethernet_ip': self.camera_ip_var.get(),
-                'wifi_ip': self.camera_ip_var.get(),  # Same IP for router connection
+                'ethernet_ip': self.ethernet_ip_var.get(),
+                'wifi_ip': self.wifi_ip_var.get(),
                 'username': self.username_var.get(),
                 'password': self.password_var.get(),
                 'port': int(self.port_var.get()),
                 'auto_switch_enabled': False,  # Not needed for router connection
-                'preferred_connection': 'ethernet',
+                'preferred_connection': self.connection_type_var.get(),
                 'monitor_interval': 5,
                 'failover_timeout': 5
             }

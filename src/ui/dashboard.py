@@ -943,6 +943,7 @@ class HotelDashboard:
             self.processed_faces[bbox_key]['processed'] = True
             self.processed_faces[bbox_key]['is_staff'] = True
             self.processed_faces[bbox_key]['customer_id'] = staff_id
+            self.processed_faces[bbox_key]['persistent'] = True
             
         except Exception as e:
             print(f"❌ Staff processing error: {e}")
@@ -995,6 +996,7 @@ class HotelDashboard:
             # Mark as processed
             self.processed_faces[bbox_key]['processed'] = True
             self.processed_faces[bbox_key]['customer_id'] = customer_id
+            self.processed_faces[bbox_key]['persistent'] = True
             
         except Exception as e:
             print(f"❌ Customer processing error: {e}")
@@ -1034,6 +1036,7 @@ class HotelDashboard:
                     self.processed_faces[bbox_key]['processed'] = True
                     self.processed_faces[bbox_key]['customer_id'] = new_customer_id
                     self.processed_faces[bbox_key]['total_visits'] = 1
+                    self.processed_faces[bbox_key]['persistent'] = True
                 else:
                     self.set_face_message(bbox_key, "Processing failed\nTry again", (255, 0, 0))
             else:
@@ -1075,7 +1078,7 @@ class HotelDashboard:
     def cleanup_message_timers(self):
         """Clean up message timers and update messages"""
         current_time = time.time()
-        
+
         # Check for scheduled message updates
         for bbox_key, timer_data in list(self.message_timers.items()):
             if current_time >= timer_data['update_time']:
@@ -1084,9 +1087,15 @@ class HotelDashboard:
                 # Remove the timer
                 del self.message_timers[bbox_key]
                 print(f"🔄 Updated message for {bbox_key}")
-        
-        # Clean up old messages (remove after 30 seconds)
+
+        # Clean up old messages, but respect the 'persistent' flag
         for bbox_key in list(self.face_messages.keys()):
+            # **** NEW LOGIC HERE ****
+            # If the face has a persistent message, don't clear it.
+            if self.processed_faces.get(bbox_key, {}).get('persistent', False):
+                continue  # Skip cleanup for this message
+
+            # Original cleanup logic for non-persistent messages
             if current_time - self.face_messages[bbox_key]['timestamp'] > 30:
                 del self.face_messages[bbox_key]
                 if bbox_key in self.processed_faces:

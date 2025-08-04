@@ -16,6 +16,7 @@ from core.face_engine import FaceRecognitionEngine
 from core.tracking_manager import TrackingManager
 from utils.camera_utils import CameraManager
 from core.config_manager import ConfigManager
+from core.database_manager import DatabaseManager
 
 class HotelDashboard:
     def __init__(self, root, gpu_available=False):
@@ -23,7 +24,7 @@ class HotelDashboard:
         self.gpu_available = gpu_available
         self.running = False
         self.config = ConfigManager()
-        self.db_manager = None
+        self.db_manager = DatabaseManager()
         
         # Initialize fullscreen variables FIRST
         self.fullscreen_window = None
@@ -254,7 +255,14 @@ class HotelDashboard:
         self.staff_late_label = ttk.Label(attendance_frame, text="Late: 0", font=("Arial", 10))
         self.staff_late_label.pack(anchor=tk.W)
 
-        ttk.Button(attendance_frame, text="View Details", command=self.open_staff_attendance).pack(anchor=tk.E, pady=2)
+        ttk.Button(
+            attendance_frame,
+            text="📋 Manage Attendance",
+            command=self.open_staff_attendance,
+        ).pack(anchor=tk.E, pady=2)
+
+        # Start periodic attendance updates
+        self.update_staff_attendance()
         
         # Welcome Messages
         messages_frame = ttk.LabelFrame(right_panel, text="💬 System Messages", padding=5)
@@ -1353,6 +1361,41 @@ class HotelDashboard:
             StaffAttendanceWindow(self.parent)
         except Exception as e:
             print(f"❌ Staff attendance window error: {e}")
+
+    def update_staff_attendance(self):
+        """Refresh staff attendance summary on the dashboard."""
+        try:
+            if not self.db_manager:
+                self.db_manager = DatabaseManager()
+
+            with self.db_manager.lock:
+                conn = sqlite3.connect(self.db_manager.db_path)
+                cursor = conn.cursor()
+
+                today = date.today()
+                cursor.execute(
+                    "SELECT status, COUNT(*) FROM staff_attendance WHERE date = ? GROUP BY status",
+                    (today,),
+                )
+                counts = {row[0]: row[1] for row in cursor.fetchall()}
+
+                # Total active staff
+                cursor.execute("SELECT COUNT(*) FROM staff WHERE is_active = 1")
+                total_staff = cursor.fetchone()[0]
+                conn.close()
+
+            present = counts.get("Present", 0)
+            late = counts.get("Late", 0)
+            absent = max(total_staff - present - late, 0)
+
+            self.staff_present_label.config(text=f"Present: {present}")
+            self.staff_absent_label.config(text=f"Absent: {absent}")
+            self.staff_late_label.config(text=f"Late: {late}")
+        except Exception as e:
+            print(f"❌ Attendance summary update error: {e}")
+        finally:
+            # Schedule next update
+            self.parent.after(60000, self.update_staff_attendance)
 
     def update_display_thread_safe(self, frame):
         """Thread-safe display update"""

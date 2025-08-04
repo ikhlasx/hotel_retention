@@ -82,10 +82,13 @@ class CameraSetupWindow:
         
         # Resolution
         ttk.Label(advanced_frame, text="Resolution:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.resolution_var = tk.StringVar(value="1280x720")
-        resolution_combo = ttk.Combobox(advanced_frame, textvariable=self.resolution_var,
-                                       values=["640x480", "1280x720", "1920x1080", "2560x1440"],
-                                       width=12)
+        self.resolution_var = tk.StringVar(value="1920x1080")
+        resolution_combo = ttk.Combobox(
+            advanced_frame,
+            textvariable=self.resolution_var,
+            values=["640x480", "1280x720", "1920x1080"],
+            width=12,
+        )
         resolution_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=5)
         
         # FPS

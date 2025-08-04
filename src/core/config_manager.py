@@ -84,7 +84,7 @@ class ConfigManager:
             "source_type": "usb",
             "rtsp_url": "rtsp://admin:password@192.168.1.100:554/stream1",
             "usb_index": 0,
-            "resolution": "1280x720",
+            "resolution": "1920x1080",
             "fps": 25,
             "buffer_size": 5,
             "transport": "TCP"

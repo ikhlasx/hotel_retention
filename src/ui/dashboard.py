@@ -699,11 +699,11 @@ class HotelDashboard:
                             cv2.putText(frame, "IDENTIFIED", (x1, y1-40), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, persistent_color, 2)
                             
-                            # Draw main message ABOVE the face with larger font
+                            # Draw main message BELOW the face with larger font
                             if persistent_message:
                                 lines = persistent_message.split('\n')
                                 for j, line in enumerate(lines):
-                                    text_y = max(30, y1 - 15 - (len(lines)-j) * 30)  # More spacing
+                                    text_y = y2 + 20 + j * 20
                                     cv2.putText(frame, line, (x1, text_y),
                                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, persistent_color, 2)  # Larger font
                             
@@ -723,11 +723,11 @@ class HotelDashboard:
                                 # Draw regular bounding box
                                 cv2.rectangle(frame, (x1-2, y1-2), (x2+2, y2+2), color, 3)
                                 
-                                # Draw message
+                                # Draw message below the face
                                 if message:
                                     lines = message.split('\n')
                                     for j, line in enumerate(lines):
-                                        text_y = max(30, y1 - 15 - (len(lines)-j) * 25)
+                                        text_y = y2 + 20 + j * 20
                                         cv2.putText(frame, line, (x1, text_y),
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                             else:
@@ -1153,17 +1153,17 @@ class HotelDashboard:
                         # **CRITICAL: Draw main bounding box**
                         cv2.rectangle(frame, (x1-2, y1-2), (x2+2, y2+2), color, 3)
                         
-                        # **CRITICAL: Draw main message ABOVE the face**
+                        # **CRITICAL: Draw main message BELOW the face**
                         if message:
                             lines = message.split('\n')
                             for j, line in enumerate(lines):
-                                text_y = max(30, y1 - 15 - (len(lines)-j) * 20)
+                                text_y = y2 + 20 + j * 20
                                 cv2.putText(frame, line, (x1, text_y),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                        
+
                         # **CRITICAL: Draw visits message ABOVE the face for visibility**
                         if visits_message:
-                            text_pos = (x1, max(40, y1 - 40))
+                            text_pos = (x1, y1 - 40)
                             cv2.putText(frame, visits_message, text_pos,
                                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                         

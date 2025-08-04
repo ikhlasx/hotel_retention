@@ -173,6 +173,7 @@ class HotelRecognitionApp:
         tools_menu.add_command(label="🔍 Detection Test", command=self.test_detection)
         tools_menu.add_command(label="📷 Camera Test", command=self.test_camera_connection)
         tools_menu.add_command(label="📊 System Statistics", command=self.show_system_stats)
+        tools_menu.add_command(label="📸 Captured Photos", command=self.open_captured_photos)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -234,6 +235,7 @@ class HotelRecognitionApp:
                 from ui.staff_management import StaffManagementWindow
                 from ui.reports import ReportsWindow
                 from ui.staff_attendance import StaffAttendanceWindow
+                from ui.captured_photos import CapturedPhotosWindow
                 
                 # Store classes for later use
                 self.HotelDashboard = HotelDashboard
@@ -241,6 +243,7 @@ class HotelRecognitionApp:
                 self.StaffManagementWindow = StaffManagementWindow
                 self.ReportsWindow = ReportsWindow
                 self.StaffAttendanceWindow = StaffAttendanceWindow
+                self.CapturedPhotosWindow = CapturedPhotosWindow
                 
                 # Initialize dashboard
                 print("🎯 Initializing Enhanced Face Detection Dashboard...")
@@ -372,6 +375,16 @@ The system will continue to run with limited functionality."""
                 messagebox.showerror("Error", "Reports module not available")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open reports: {e}")
+
+    def open_captured_photos(self):
+        """Open captured photos window"""
+        try:
+            if hasattr(self, 'CapturedPhotosWindow'):
+                self.CapturedPhotosWindow(self.root, self.dashboard.captured_photos)
+            else:
+                messagebox.showerror("Error", "Captured photos module not available")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open captured photos: {e}")
 
     def open_settings(self):
         """Open system settings"""

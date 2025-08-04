@@ -73,7 +73,7 @@ class OptimizedFaceTracker:
                 )
                 self.state = "new_visit_recorded"
 
-    def set_retention_message(self, message, duration=4.0):
+    def set_retention_message(self, message, duration=10.0):
         self.display_message = message
         self.message_time = time.time()
         self.display_duration = duration

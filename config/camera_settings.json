@@ -4,6 +4,5 @@
     "fps": 25,
     "buffer_size": 5,
     "transport": "UDP",
-    "rtsp_url": "rtsp://admin:Ikhlas@123@192.168.1.12:554/Streaming/Channels/101",
-    "camera_mac": null
+    "rtsp_url": "rtsp://admin:Ikhlas@123@192.168.1.99:554/Streaming/Channels/101"
 }

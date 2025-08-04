@@ -88,6 +88,8 @@ class OptimizedFaceTracker:
 
     @state.setter
     def state(self, value):
+        if getattr(self, '_state', None) == value:
+            return
         self._state = value
         color_map = {
             'checking': (255, 255, 0),
@@ -116,11 +118,7 @@ class TrackingManager:
     def process_customer_retention(self, track):
         """Run customer retention logic with cosine-similarity verification."""
         try:
-            if (
-                not getattr(track, 'customer_processed', False)
-                and track.stability_frames >= track.min_stability
-                and hasattr(track, 'embedding')
-            ):
+            if getattr(track, 'customer_processed', False):
                 best_match_id = None
                 best_score = 0.0
                 threshold = 0.6
@@ -154,7 +152,7 @@ class TrackingManager:
                             track.set_retention_message("Welcome back!\nAlready processed today")
                 else:
                     track.confidence = 0.0
-                    if track.stability_frames >= track.min_stability + 5:
+                    if track.stability_frames >= track.min_stability and hasattr(track, 'embedding'):
                         new_customer_id = self.face_engine.register_new_customer(track.embedding)
                         if new_customer_id:
                             visit_result = self.db_manager.record_customer_visit(new_customer_id, best_score)
@@ -196,9 +194,9 @@ class TrackingManager:
                     self.process_customer_retention(tracker)
                 else:
                     tracker = OptimizedFaceTracker(track_id, bbox, embedding)
+                    tracker.set_retention_message("Analyzing customer...", duration=5.0)
                     self.active_tracks[track_id] = tracker
-                updated_tracks.append(tracker)
-
+                    updated_tracks.append(tracker)
             for tid in list(self.active_tracks.keys()):
                 if tid not in active_ids:
                     del self.active_tracks[tid]

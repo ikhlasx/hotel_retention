@@ -1133,10 +1133,11 @@ class HotelDashboard:
                                 cv2.putText(frame, line, (x1, text_y),
                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                         
-                        # **CRITICAL: Draw visits message BELOW the face**
+                        # **CRITICAL: Draw visits message ABOVE the face for visibility**
                         if visits_message:
-                            cv2.putText(frame, visits_message, (x1, y2 + 20),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                            text_pos = (x1, max(40, y1 - 40))
+                            cv2.putText(frame, visits_message, text_pos,
+                                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                         
                         # Draw confidence
                         cv2.putText(frame, f"Conf: {confidence:.3f}", (x1, y1-5),

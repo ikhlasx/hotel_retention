@@ -118,55 +118,57 @@ class TrackingManager:
     def process_customer_retention(self, track):
         """Run customer retention logic with cosine-similarity verification."""
         try:
-            if getattr(track, 'customer_processed', False):
-                best_match_id = None
-                best_score = 0.0
-                threshold = 0.6
+            if getattr(track, "customer_processed", False):
+                return
 
-                embedding = track.embedding
-                for cust_id, stored in self.face_engine.customer_database.items():
-                    score = cosine_sim(embedding, stored)
-                    if score > best_score:
-                        best_score = score
-                        best_match_id = cust_id
-                    if best_score >= 0.85:
-                        break
+            best_match_id = None
+            best_score = 0.0
+            threshold = 0.6
 
-                if best_score >= threshold and best_match_id:
-                    track.confidence = best_score
-                    visit_status = self.db_manager.check_daily_visit_status(best_match_id)
+            embedding = track.embedding
+            for cust_id, stored in self.face_engine.customer_database.items():
+                score = cosine_sim(embedding, stored)
+                if score > best_score:
+                    best_score = score
+                    best_match_id = cust_id
+                if best_score >= 0.85:
+                    break
 
-                    if visit_status['visited_today']:
-                        track.update_customer_info(best_match_id, visit_status)
+            if best_score >= threshold and best_match_id:
+                track.confidence = best_score
+                visit_status = self.db_manager.check_daily_visit_status(best_match_id)
+
+                if visit_status['visited_today']:
+                    track.update_customer_info(best_match_id, visit_status)
+                    track.set_retention_message(
+                        f"Welcome back!\nAlready counted today\nTotal visits: {visit_status['total_visits']}"
+                    )
+                else:
+                    visit_result = self.db_manager.record_customer_visit(best_match_id, best_score)
+                    if visit_result['success']:
+                        track.update_customer_info(best_match_id, visit_result)
                         track.set_retention_message(
-                            f"Welcome back!\nAlready counted today\nTotal visits: {visit_status['total_visits']}"
+                            f"Welcome!\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
                         )
                     else:
-                        visit_result = self.db_manager.record_customer_visit(best_match_id, best_score)
+                        track.set_retention_message("Welcome back!\nAlready processed today")
+            else:
+                track.confidence = 0.0
+                if track.stability_frames >= track.min_stability and hasattr(track, 'embedding'):
+                    new_customer_id = self.face_engine.register_new_customer(track.embedding)
+                    if new_customer_id:
+                        visit_result = self.db_manager.record_customer_visit(new_customer_id, best_score)
                         if visit_result['success']:
-                            track.update_customer_info(best_match_id, visit_result)
+                            track.update_customer_info(new_customer_id, visit_result)
                             track.set_retention_message(
-                                f"Welcome!\nVisit #{visit_result['total_visits']} recorded\nThank you for visiting!"
+                                f"Welcome new customer!\nID: {new_customer_id}\nFirst visit recorded\nThank you for choosing us!"
                             )
                         else:
-                            track.set_retention_message("Welcome back!\nAlready processed today")
-                else:
-                    track.confidence = 0.0
-                    if track.stability_frames >= track.min_stability and hasattr(track, 'embedding'):
-                        new_customer_id = self.face_engine.register_new_customer(track.embedding)
-                        if new_customer_id:
-                            visit_result = self.db_manager.record_customer_visit(new_customer_id, best_score)
-                            if visit_result['success']:
-                                track.update_customer_info(new_customer_id, visit_result)
-                                track.set_retention_message(
-                                    f"Welcome new customer!\nID: {new_customer_id}\nFirst visit recorded\nThank you for choosing us!"
-                                )
-                            else:
-                                track.set_retention_message("Welcome! Processing...")
-                        else:
-                            track.set_retention_message("Welcome visitor!")
+                            track.set_retention_message("Welcome! Processing...")
+                    else:
+                        track.set_retention_message("Welcome visitor!")
 
-                track.customer_processed = True
+            track.customer_processed = True
 
         except Exception as e:
             print(f"❌ Customer retention processing error: {e}")

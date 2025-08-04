@@ -111,7 +111,10 @@ class CameraManager:
                 os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = 'rtsp_transport;tcp'
 
                 # CRITICAL: Actually attempt the connection
-                return self._attempt_connection(camera_source, cv2.CAP_FFMPEG)
+                if self._attempt_connection(camera_source, cv2.CAP_FFMPEG):
+                    return True
+                print("❌ Initial connection failed. Attempting to rediscover camera...")
+                return self._update_ip_and_retry()
 
         except Exception as e:
             print(f"❌ Camera start error: {e}")
@@ -174,6 +177,46 @@ class CameraManager:
 
         except Exception as e:
             print(f"❌ Connection attempt error: {e}")
+            return False
+
+    def _update_ip_and_retry(self):
+        """Scan the network for the camera, update IP, and retry connection"""
+        try:
+            new_ip = self._scan_for_camera()
+            if not new_ip:
+                return False
+            self.config.update_camera_ip(new_ip)
+            new_url = self.config.get_camera_settings().get('rtsp_url')
+            print(f"🔄 Retrying connection with new IP: {new_url}")
+            return self._attempt_connection(new_url, cv2.CAP_FFMPEG)
+        except Exception as e:
+            print(f"❌ IP update retry error: {e}")
+            return False
+
+    def _scan_for_camera(self, network_range="192.168.1.0/24"):
+        """Scan network to find a reachable camera"""
+        try:
+            import ipaddress
+            network = ipaddress.IPv4Network(network_range, strict=False)
+            for ip in network.hosts():
+                ip_str = str(ip)
+                if self._test_port(ip_str, 554):
+                    print(f"📡 Camera discovered at {ip_str}")
+                    return ip_str
+        except Exception as e:
+            print(f"❌ Scan error: {e}")
+        return None
+
+    def _test_port(self, ip, port):
+        """Check if a TCP port is open"""
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            return result == 0
+        except Exception:
             return False
 
     def _ultra_low_latency_capture(self):

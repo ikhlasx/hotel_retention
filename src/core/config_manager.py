@@ -2,7 +2,8 @@
 import json
 import os
 import shutil
-from typing import Dict, Any
+from typing import Dict, Any, Callable
+from urllib.parse import urlparse
 
 class ConfigManager:
     def __init__(self, config_dir="config"):
@@ -16,6 +17,10 @@ class ConfigManager:
         
         # Load or create default settings
         self.settings = self.load_settings()
+
+        # Callbacks for camera IP changes
+        self.ip_change_callbacks = []
+
         print(f"ConfigManager initialized with camera file: {self.camera_file}")
         
     def load_settings(self) -> Dict[str, Any]:
@@ -87,7 +92,8 @@ class ConfigManager:
             "resolution": "1920x1080",
             "fps": 25,
             "buffer_size": 5,
-            "transport": "TCP"
+            "transport": "TCP",
+            "camera_mac": None,
         }
         print(f"Using default camera settings: {default_settings}")
         return default_settings
@@ -103,6 +109,46 @@ class ConfigManager:
             print("Camera settings saved successfully!")
         except Exception as e:
             print(f"Error saving camera settings: {e}")
+
+    def update_camera_ip(self, new_ip: str):
+        """Update the IP address portion of the stored RTSP URL"""
+        try:
+            settings = self.get_camera_settings()
+            rtsp_url = settings.get("rtsp_url", "")
+            if not rtsp_url:
+                return
+
+            parsed = urlparse(rtsp_url)
+            username = parsed.username or ""
+            password = parsed.password or ""
+            port = parsed.port or 554
+            path = parsed.path or ""
+
+            if username and password:
+                auth_part = f"{username}:{password}@"
+            elif username:
+                auth_part = f"{username}@"
+            else:
+                auth_part = ""
+
+            new_url = f"rtsp://{auth_part}{new_ip}:{port}{path}"
+            settings["rtsp_url"] = new_url
+            self.save_camera_settings(settings)
+            self._notify_ip_change(new_ip)
+        except Exception as e:
+            print(f"Error updating camera IP: {e}")
+
+    def register_ip_change_callback(self, callback: Callable[[str], None]):
+        """Register a callback for camera IP changes"""
+        if callback not in self.ip_change_callbacks:
+            self.ip_change_callbacks.append(callback)
+
+    def _notify_ip_change(self, new_ip: str):
+        for cb in self.ip_change_callbacks:
+            try:
+                cb(new_ip)
+            except Exception as e:
+                print(f"IP change callback error: {e}")
 
     def get_network_settings(self) -> Dict[str, Any]:
         """Load network configuration"""

@@ -24,6 +24,7 @@ class HotelDashboard:
         self.gpu_available = gpu_available
         self.running = False
         self.config = ConfigManager()
+        self.config.register_ip_change_callback(self.on_camera_ip_change)
         self.db_manager = DatabaseManager()
         
         # Initialize fullscreen variables FIRST
@@ -176,10 +177,13 @@ class HotelDashboard:
         # Enhanced status display
         status_frame = ttk.Frame(control_frame)
         status_frame.pack(fill=tk.X, pady=5)
-        
+
         self.camera_status = ttk.Label(status_frame, text="📹 Camera: Disconnected", foreground="red")
         self.camera_status.pack(side=tk.LEFT)
-        
+
+        self.camera_ip_label = ttk.Label(status_frame, text=f"IP: {self._get_current_camera_ip()}")
+        self.camera_ip_label.pack(side=tk.LEFT, padx=(10, 0))
+
         self.processing_status = ttk.Label(status_frame, text="🧠 Processing: Stopped", foreground="red")
         self.processing_status.pack(side=tk.RIGHT)
         
@@ -280,6 +284,30 @@ class HotelDashboard:
         self.face_engine = None
         self.tracking_manager = None
         self.camera_manager = CameraManager()
+
+    def _get_current_camera_ip(self):
+        """Fetch current camera IP from configuration"""
+        try:
+            settings = self.config.get_camera_settings()
+            url = settings.get('rtsp_url', '')
+            if '://' in url and '@' in url:
+                after_auth = url.split('://', 1)[1].split('@', 1)[1]
+                return after_auth.split(':')[0]
+        except Exception:
+            pass
+        return 'Unknown'
+
+    def on_camera_ip_change(self, new_ip):
+        """Callback when camera IP changes"""
+        try:
+            self.parent.after(0, lambda: self._handle_ip_change(new_ip))
+        except Exception as e:
+            print(f"IP change callback error: {e}")
+
+    def _handle_ip_change(self, new_ip):
+        self.camera_ip_label.config(text=f"IP: {new_ip}")
+        messagebox.showinfo("Camera IP Updated", f"Camera IP changed to {new_ip}")
+        print(f"Camera IP updated to {new_ip}")
 
     def start_enhanced_recognition(self):
         """Start enhanced face recognition system with working message flow"""

@@ -828,37 +828,62 @@ class HotelDashboard:
             bbox = detection.get('bbox')
             if bbox is None:
                 return
-            
+
             bbox_key = self.get_bbox_key(bbox)
-            
+
+            # Always update tracking and check for existing persistent message
+            persistent_msg, persistent_color, _ = self.get_persistent_message_for_face(bbox)
+
             # Initialize face processing if not exists
             if bbox_key not in self.processed_faces:
-                self.processed_faces[bbox_key] = {
-                    'status': 'checking',
-                    'start_time': current_time,
-                    'customer_id': None,
-                    'is_staff': False,
-                    'total_visits': 0,
-                    'processed': False,
-                    'detection': detection
-                }
-                
-                # Set initial "Checking..." message
-                self.set_face_message(bbox_key, "Checking...", (255, 255, 0))  # Yellow
-                print(f"🔍 Started checking {bbox_key}")
-                return
-            
+                if persistent_msg:
+                    # Use existing persistent message without showing "Checking..."
+                    self.processed_faces[bbox_key] = {
+                        'status': 'identified',
+                        'start_time': current_time,
+                        'customer_id': None,
+                        'is_staff': False,
+                        'total_visits': 0,
+                        'processed': True,
+                        'detection': detection,
+                        'persistent': True
+                    }
+                    self.set_face_message(bbox_key, persistent_msg, persistent_color)
+                    return
+                else:
+                    self.processed_faces[bbox_key] = {
+                        'status': 'checking',
+                        'start_time': current_time,
+                        'customer_id': None,
+                        'is_staff': False,
+                        'total_visits': 0,
+                        'processed': False,
+                        'detection': detection
+                    }
+
+                    # Set initial "Checking..." message
+                    self.set_face_message(bbox_key, "Checking...", (255, 255, 0))  # Yellow
+                    print(f"🔍 Started checking {bbox_key}")
+                    return
+
             face_data = self.processed_faces[bbox_key]
-            
-            # Skip if already processed
-            if face_data['processed']:
+
+            # If a persistent message appears after initialization, apply it
+            if persistent_msg and not face_data.get('processed'):
+                self.set_face_message(bbox_key, persistent_msg, persistent_color)
+                face_data['processed'] = True
+                face_data['persistent'] = True
                 return
-            
+
+            # Skip if already processed
+            if face_data.get('processed'):
+                return
+
             # Get embedding from detection
             embedding = detection.get('embedding')
             if embedding is None:
                 return
-            
+
             # Process after checking duration (2 seconds)
             if current_time - face_data['start_time'] >= self.checking_duration:
                 self.identify_and_process_person_working(bbox_key, embedding, current_time)
@@ -1105,6 +1130,9 @@ class HotelDashboard:
         """Draw faces with WORKING message system - THIS IS THE KEY FIX"""
         try:
             current_time = time.time()
+
+            # Clean up expired tracking IDs and messages
+            self.cleanup_expired_tracking()
             
             # **CRITICAL: Process all current detections and draw messages**
             if hasattr(self, 'current_detections'):

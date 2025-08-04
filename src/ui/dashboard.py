@@ -1,7 +1,7 @@
 # src/ui/dashboard.py - Enhanced Implementation with Fixed Message Flow and Fullscreen
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 import cv2
 from PIL import Image, ImageTk
 import threading
@@ -241,19 +241,20 @@ class HotelDashboard:
         self.recent_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         detection_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Photo Gallery
-        photos_frame = ttk.LabelFrame(right_panel, text="📸 Captured Photos", padding=5)
-        photos_frame.pack(fill=tk.X, pady=5)
-        
-        self.photos_listbox = tk.Listbox(photos_frame, height=4)
-        self.photos_listbox.pack(fill=tk.X)
-        
-        photo_buttons = ttk.Frame(photos_frame)
-        photo_buttons.pack(fill=tk.X, pady=2)
-        
-        ttk.Button(photo_buttons, text="🔍 View", command=self.view_captured_photo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(photo_buttons, text="💾 Save", command=self.save_captured_photo).pack(side=tk.LEFT, padx=2)
-        ttk.Button(photo_buttons, text="🗑️ Clear", command=self.clear_captured_photos).pack(side=tk.LEFT, padx=2)
+        # Staff Attendance Summary
+        attendance_frame = ttk.LabelFrame(right_panel, text="🕒 Staff Attendance", padding=5)
+        attendance_frame.pack(fill=tk.X, pady=5)
+
+        self.staff_present_label = ttk.Label(attendance_frame, text="Present: 0", font=("Arial", 10))
+        self.staff_present_label.pack(anchor=tk.W)
+
+        self.staff_absent_label = ttk.Label(attendance_frame, text="Absent: 0", font=("Arial", 10))
+        self.staff_absent_label.pack(anchor=tk.W)
+
+        self.staff_late_label = ttk.Label(attendance_frame, text="Late: 0", font=("Arial", 10))
+        self.staff_late_label.pack(anchor=tk.W)
+
+        ttk.Button(attendance_frame, text="View Details", command=self.open_staff_attendance).pack(anchor=tk.E, pady=2)
         
         # Welcome Messages
         messages_frame = ttk.LabelFrame(right_panel, text="💬 System Messages", padding=5)
@@ -1332,11 +1333,7 @@ class HotelDashboard:
                     }
                     
                     self.captured_photos.append(photo_data)
-                    
-                    # Update photos listbox
-                    list_entry = f"{timestamp.strftime('%H:%M:%S')} - Enhanced Capture"
-                    self.photos_listbox.insert(0, list_entry)
-                    
+
                     return True
                     
         except Exception as e:
@@ -1349,76 +1346,13 @@ class HotelDashboard:
         status = "enabled" if self.auto_capture_enabled else "disabled"
         print(f"✅ Auto-capture {status}")
 
-    def view_captured_photo(self):
-        """View selected photo"""
+    def open_staff_attendance(self):
+        """Open the staff attendance window"""
         try:
-            selection = self.photos_listbox.curselection()
-            if not selection:
-                messagebox.showwarning("Selection Error", "Please select a photo")
-                return
-            
-            photo_index = selection[0]
-            if photo_index < len(self.captured_photos):
-                photo_data = self.captured_photos[photo_index]
-                
-                # Create photo viewer
-                viewer = tk.Toplevel(self.parent)
-                viewer.title(f"Photo Viewer - {photo_data['filename']}")
-                viewer.geometry("900x700")
-                
-                # Convert and display
-                frame = photo_data['frame']
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(frame_rgb)
-                pil_image.thumbnail((880, 650))
-                photo = ImageTk.PhotoImage(pil_image)
-                
-                label = tk.Label(viewer, image=photo)
-                label.image = photo
-                label.pack(expand=True)
-                
+            from ui.staff_attendance import StaffAttendanceWindow
+            StaffAttendanceWindow(self.parent)
         except Exception as e:
-            print(f"❌ Photo viewer error: {e}")
-
-    def save_captured_photo(self):
-        """Save selected photo"""
-        try:
-            selection = self.photos_listbox.curselection()
-            if not selection:
-                messagebox.showwarning("Selection Error", "Please select a photo")
-                return
-            
-            photo_index = selection[0]
-            if photo_index < len(self.captured_photos):
-                photo_data = self.captured_photos[photo_index]
-                
-                filename = filedialog.asksaveasfilename(
-                    defaultextension=".jpg",
-                    filetypes=[("JPEG files", "*.jpg"), ("PNG files", "*.png")],
-                    initialname=photo_data['filename']
-                )
-                
-                if filename:
-                    cv2.imwrite(filename, photo_data['frame'])
-                    messagebox.showinfo("Success", f"Photo saved to: {filename}")
-                    
-        except Exception as e:
-            print(f"❌ Save photo error: {e}")
-
-    def clear_captured_photos(self):
-        """Clear all captured photos"""
-        try:
-            if len(self.captured_photos) > 0:
-                result = messagebox.askyesno(
-                    "Clear Photos", 
-                    f"Clear all {len(self.captured_photos)} photos?"
-                )
-                if result:
-                    self.captured_photos.clear()
-                    self.photos_listbox.delete(0, tk.END)
-                    
-        except Exception as e:
-            print(f"❌ Clear photos error: {e}")
+            print(f"❌ Staff attendance window error: {e}")
 
     def update_display_thread_safe(self, frame):
         """Thread-safe display update"""

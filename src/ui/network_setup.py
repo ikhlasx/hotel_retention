@@ -7,12 +7,14 @@ import subprocess
 import platform
 import threading
 import ipaddress
+import time
 from core.config_manager import ConfigManager
 
 class NetworkSetupWindow:
     def __init__(self, parent):
         self.parent = parent
         self.config = ConfigManager()
+        self.discovered_cameras = []
         
         self.window = tk.Toplevel(parent)
         self.window.title("🌐 Network Camera Setup - Router Connection")
@@ -26,6 +28,7 @@ class NetworkSetupWindow:
         
         # Auto-discover cameras on startup
         self.auto_discover_cameras()
+        self.auto_discover_and_update_camera()
 
     def setup_gui(self):
         """Setup GUI for router-connected camera configuration"""
@@ -191,49 +194,64 @@ class NetworkSetupWindow:
         self.log_status("🔍 Auto-discovering cameras on network...")
         threading.Thread(target=self.discover_cameras, daemon=True).start()
 
+    def auto_discover_and_update_camera(self):
+        """Continuously monitor the camera IP and update configuration if it changes"""
+        def monitor_camera():
+            while True:
+                settings = self.config.get_camera_settings()
+                ip, port = self.extract_ip_from_url(settings.get('rtsp_url', ''))
+
+                if ip and not self.test_camera_port(ip, port):
+                    self.log_status("📡 Camera not reachable, scanning for new IP...")
+                    found = self.scan_for_cameras(self.network_range_var.get())
+                    if found:
+                        new_ip = found[0]['ip']
+                        self.config.update_camera_ip(new_ip)
+                time.sleep(30)
+
+        threading.Thread(target=monitor_camera, daemon=True).start()
+
+    def scan_for_cameras(self, network_range):
+        """Scan the network range and return discovered cameras"""
+        try:
+            network = ipaddress.IPv4Network(network_range, strict=False)
+        except Exception:
+            network = ipaddress.IPv4Network("192.168.1.0/24", strict=False)
+
+        found_cameras = []
+        for ip in network.hosts():
+            ip_str = str(ip)
+            for port in [554, 8554, 80, 8080]:
+                if self.test_camera_port(ip_str, port):
+                    camera_info = self.get_camera_info(ip_str, port)
+                    found_cameras.append(camera_info)
+                    break
+        return found_cameras
+
     def discover_cameras(self):
         """Discover cameras on the network"""
         try:
             self.log_status("🔍 Starting camera discovery...")
-            
+
             # Clear existing entries
             for item in self.camera_tree.get_children():
                 self.camera_tree.delete(item)
-            
-            # Get network range
             network_range = self.network_range_var.get()
-            
-            try:
-                network = ipaddress.IPv4Network(network_range, strict=False)
-            except:
-                network = ipaddress.IPv4Network("192.168.1.0/24", strict=False)
-            
-            found_cameras = []
-            
-            # Scan network range
-            for ip in network.hosts():
-                ip_str = str(ip)
-                
-                # Test common camera ports
-                for port in [554, 8554, 80, 8080]:
-                    if self.test_camera_port(ip_str, port):
-                        camera_info = self.get_camera_info(ip_str, port)
-                        found_cameras.append(camera_info)
-                        
-                        # Add to tree
-                        self.camera_tree.insert('', 'end', values=(
-                            camera_info['ip'],
-                            camera_info['port'],
-                            camera_info['status'],
-                            camera_info['model']
-                        ))
-                        
-                        self.log_status(f"📹 Found camera at {ip_str}:{port}")
-                        break  # Found on this IP, move to next
-            
+            found_cameras = self.scan_for_cameras(network_range)
+            self.discovered_cameras = found_cameras
+
+            for camera_info in found_cameras:
+                self.camera_tree.insert('', 'end', values=(
+                    camera_info['ip'],
+                    camera_info['port'],
+                    camera_info['status'],
+                    camera_info['model']
+                ))
+                self.log_status(f"📹 Found camera at {camera_info['ip']}:{camera_info['port']}")
+
             if found_cameras:
                 self.log_status(f"✅ Discovery complete. Found {len(found_cameras)} cameras")
-                
+
                 # Auto-select first camera
                 if len(found_cameras) > 0:
                     first_item = self.camera_tree.get_children()[0]
@@ -255,6 +273,20 @@ class NetworkSetupWindow:
             return result == 0
         except:
             return False
+
+    def extract_ip_from_url(self, url):
+        """Extract IP and port from an RTSP URL"""
+        try:
+            if '://' in url and '@' in url:
+                after_auth = url.split('://', 1)[1].split('@', 1)[1]
+                host_part = after_auth.split('/', 1)[0]
+                if ':' in host_part:
+                    ip, port = host_part.split(':', 1)
+                    return ip, int(port)
+                return host_part, 554
+        except Exception:
+            pass
+        return '', 554
 
     def get_camera_info(self, ip, port):
         """Get camera information"""
@@ -511,7 +543,8 @@ class NetworkSetupWindow:
                 'resolution': '1920x1080',
                 'fps': 25,
                 'buffer_size': 1,
-                'transport': 'TCP'
+                'transport': 'TCP',
+                'camera_mac': self.config.get_camera_settings().get('camera_mac')
             }
             
             # Save settings

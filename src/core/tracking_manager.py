@@ -63,13 +63,15 @@ class OptimizedFaceTracker:
 
             if visit_status.get('visited_today'):
                 self.set_retention_message(
-                    f"Welcome back!\nAlready counted today\nTotal visits: {self.total_visits}"
+                    f"Welcome back!\nAlready counted today\nTotal visits: {self.total_visits}",
+                    duration=999,
                 )
                 self.state = "already_counted_today"
             else:
                 new_total = self.total_visits + 1
                 self.set_retention_message(
-                    f"Welcome!\nVisit #{new_total} recorded\nThank you for visiting"
+                    f"Welcome!\nVisit #{new_total} recorded\nThank you for visiting",
+                    duration=999,
                 )
                 self.state = "new_visit_recorded"
 
@@ -201,6 +203,9 @@ class TrackingManager:
                     updated_tracks.append(tracker)
             for tid in list(self.active_tracks.keys()):
                 if tid not in active_ids:
+                    tracker = self.active_tracks[tid]
+                    if hasattr(tracker, "set_retention_message"):
+                        tracker.set_retention_message("", duration=0)
                     del self.active_tracks[tid]
 
             return updated_tracks
@@ -213,7 +218,9 @@ class TrackingManager:
         try:
             current_time = time.time()
             for track in tracks:
-                if current_time - track.last_seen > track.display_duration:
+                # Use a fixed timeout for inactive tracks to avoid overwriting
+                # message timers when a long display duration is set.
+                if current_time - track.last_seen > self.customer_processing_timeout:
                     continue
 
                 if not hasattr(track, 'display_bbox'):

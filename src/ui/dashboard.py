@@ -1669,7 +1669,7 @@ class HotelDashboard:
         try:
             if hasattr(self, 'face_engine') and self.face_engine:
                 # Get customer count from database
-                customers = self.face_engine.load_customers()
+                customers = self.face_engine.db_manager.load_customers()
                 customer_count = len(customers) if customers else 0
                 
                 # Get staff count from database  

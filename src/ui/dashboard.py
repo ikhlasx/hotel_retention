@@ -63,11 +63,7 @@ class HotelDashboard:
         self.fps_start_time = time.time()
         self.current_fps = 0
         self.frame_count = 0
-        self.persistent_messages = {}  # Store persistent messages by face ID
-        self.face_tracking_ids = {}    # Map bbox to tracking IDs
-        self.next_tracking_id = 1      # Counter for tracking IDs
-        self.message_persistence_time = 30.0  # Show messages for 15 seconds
-        self.face_movement_threshold = 50    # Track when each face was last identified
+        # Manual tracking structures removed in favor of DeepSort persistent IDs
         
         # Ultra-optimization settings
         self.process_every_n_frames = 2
@@ -777,25 +773,26 @@ class HotelDashboard:
                 self.frame_count += 1
                 current_time = time.time()
                 
+                tracks = []
                 # Process face detection every nth frame
                 if self.frame_count % self.process_every_n_frames == 0:
                     # Get detections from face engine
                     detections = self.face_engine.debug_face_detection(frame)
-                    
+
                     if detections:
                         print(f"🔍 Frame {self.frame_count}: Found {len(detections)} faces")
-                        
-                        # **CRITICAL: Process each detection with message flow**
-                        for i, detection in enumerate(detections):
-                            self.process_detection_with_working_flow(detection, i, current_time)
-                
-                # **CRITICAL: Draw faces with message system**
-                frame = self.draw_faces_with_working_messages(frame)
-                
+
+                    # Update DeepSort tracks
+                    tracks = self.tracking_manager.update_tracks(detections)
+
+                # Draw retention information for tracked objects
+                frame = self.tracking_manager.draw_retention_info(frame, tracks)
+
                 # Thread-safe frame update
                 with self.capture_lock:
                     self.current_frame = frame.copy()
                     self.current_detections = detections if 'detections' in locals() else []
+                    self.current_tracks = tracks
                 
                 # GUI update
                 if current_time - last_gui_update >= 0.033:  # 30 FPS
@@ -804,9 +801,6 @@ class HotelDashboard:
                 
                 # Update FPS
                 self.update_fps()
-                
-                # Clean up old message timers
-                self.cleanup_message_timers()
                 
                 # Sleep for stability
                 time.sleep(0.02)

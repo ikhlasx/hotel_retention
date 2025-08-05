@@ -319,6 +319,9 @@ class TrackingManager:
                     updated_tracks.append(tracker)
             for tid in list(self.active_tracks.keys()):
                 if tid not in active_ids:
+                    tracker = self.active_tracks[tid]
+                    if hasattr(tracker, "set_retention_message"):
+                        tracker.set_retention_message("", duration=0)
                     del self.active_tracks[tid]
 
             return updated_tracks

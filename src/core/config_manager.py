@@ -32,6 +32,7 @@ class ConfigManager:
             "max_detection_distance": 0.6,
             "min_face_size": 50,
             "gpu_enabled": True,
+            "gpu_device": 0,
             "language": "english",
             "theme": "default",
             # Adjustable face recognition match threshold. Lower values increase

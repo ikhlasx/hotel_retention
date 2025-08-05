@@ -150,6 +150,7 @@ class AddEditStaffDialog:
         self.staff_id = staff_id
         self.callback = callback
         self.photo_data = None
+        self.config = ConfigManager()
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Add Staff" if staff_id is None else "Edit Staff")
@@ -298,7 +299,11 @@ class AddEditStaffDialog:
 
         try:
             # Extract face embedding
-            face_engine = FaceRecognitionEngine()
+            gpu_enabled = self.config.get_setting("gpu_enabled", True)
+            gpu_device = self.config.get_setting("gpu_device", 0)
+            face_engine = FaceRecognitionEngine(
+                gpu_mode=gpu_enabled, gpu_device=gpu_device
+            )
             detections = face_engine.detect_faces(self.photo_data)
 
             if not detections:
@@ -423,8 +428,11 @@ class PhotoCaptureDialog:
 
             # Extract face embedding for each photo
             try:
-                from core.face_engine import FaceRecognitionEngine
-                face_engine = FaceRecognitionEngine()
+                gpu_enabled = self.config.get_setting("gpu_enabled", True)
+                gpu_device = self.config.get_setting("gpu_device", 0)
+                face_engine = FaceRecognitionEngine(
+                    gpu_mode=gpu_enabled, gpu_device=gpu_device
+                )
                 detections = face_engine.detect_faces(photo_copy)
 
                 if detections:

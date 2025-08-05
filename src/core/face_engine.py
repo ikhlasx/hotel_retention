@@ -14,8 +14,9 @@ import pickle
 
 
 class FaceRecognitionEngine:
-    def __init__(self, gpu_mode=True):
+    def __init__(self, gpu_mode=True, gpu_device: int = 0):
         self.gpu_mode = gpu_mode
+        self.gpu_device = gpu_device
         self.config = ConfigManager()
         self.db_manager = DatabaseManager()
 
@@ -34,7 +35,11 @@ class FaceRecognitionEngine:
         self.processing_resolution = (640, 480)  # Better balance of speed vs accuracy
 
         # Initialize InsightFace with optimal settings
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if gpu_mode else ['CPUExecutionProvider']
+        providers = (
+            [('CUDAExecutionProvider', {'device_id': gpu_device}), 'CPUExecutionProvider']
+            if gpu_mode
+            else ['CPUExecutionProvider']
+        )
 
         try:
             self.app = FaceAnalysis(
@@ -45,7 +50,11 @@ class FaceRecognitionEngine:
             # Optimal detection size for accuracy[75]
             # Adjust detection size for better compatibility with various camera resolutions
             det_size = (960, 960) if gpu_mode else (640, 640)
-            self.app.prepare(ctx_id=0 if gpu_mode else -1, det_size=det_size, det_thresh=0.5)
+            self.app.prepare(
+                ctx_id=gpu_device if gpu_mode else -1,
+                det_size=det_size,
+                det_thresh=0.5,
+            )
 
             print(f"✅ Enhanced face recognition initialized in {'GPU' if gpu_mode else 'CPU'} mode")
 

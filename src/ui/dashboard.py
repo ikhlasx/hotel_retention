@@ -19,9 +19,10 @@ from core.config_manager import ConfigManager
 from core.database_manager import DatabaseManager
 
 class HotelDashboard:
-    def __init__(self, root, gpu_available=False):
+    def __init__(self, root, gpu_available: bool = False, gpu_device: int = 0):
         self.parent = root
         self.gpu_available = gpu_available
+        self.gpu_device = gpu_device
         self.running = False
         self.config = ConfigManager()
         self.config.register_ip_change_callback(self.on_camera_ip_change)
@@ -312,13 +313,17 @@ class HotelDashboard:
             
             # Initialize engines
             gpu_mode = self.mode_var.get() == "GPU" and self.gpu_available
-            self.face_engine = FaceRecognitionEngine(gpu_mode=gpu_mode)
+            self.face_engine = FaceRecognitionEngine(
+                gpu_mode=gpu_mode, gpu_device=self.gpu_device
+            )
             self.db_manager = self.face_engine.db_manager
-            
+
             # **CRITICAL: Fix database schema**
             self.fix_database_schema()
-            
-            self.tracking_manager = TrackingManager(gpu_mode=gpu_mode)
+
+            self.tracking_manager = TrackingManager(
+                gpu_mode=gpu_mode, gpu_device=self.gpu_device
+            )
             
             # Start camera
             if not self.camera_manager.start_camera():

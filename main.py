@@ -128,6 +128,8 @@ class HotelRecognitionApp:
         self.config = None
         self.report_generator = None
         self.gpu_available = False
+        self.gpu_names = []
+        self.gpu_device = 0
         self.dashboard = None
         
         # Setup main interface first
@@ -215,13 +217,22 @@ class HotelRecognitionApp:
                 from utils.gpu_utils import detect_gpu_capability
                 from utils.report_generator import ReportGenerator
                 from utils.installer import check_and_install_requirements
-                
+
                 self.config = ConfigManager()
-                self.gpu_available = detect_gpu_capability()
+                self.gpu_available, self.gpu_names = detect_gpu_capability()
                 self.report_generator = ReportGenerator()
-                
-                # Update GPU status
-                gpu_status = "GPU Available" if self.gpu_available else "CPU Only"
+
+                # Update GPU status with detected device name
+                gpu_device = self.config.get_setting("gpu_device", 0)
+                self.gpu_device = gpu_device
+                if self.gpu_available and self.gpu_names:
+                    if gpu_device < len(self.gpu_names):
+                        name = self.gpu_names[gpu_device]
+                    else:
+                        name = self.gpu_names[0]
+                    gpu_status = f"GPU{gpu_device}: {name}"
+                else:
+                    gpu_status = "CPU Only"
                 self.gpu_status_label.config(text=gpu_status)
                 
                 # Check requirements
@@ -247,7 +258,11 @@ class HotelRecognitionApp:
                 
                 # Initialize dashboard
                 print("🎯 Initializing Enhanced Face Detection Dashboard...")
-                self.dashboard = self.HotelDashboard(self.root, gpu_available=self.gpu_available)
+                self.dashboard = self.HotelDashboard(
+                    self.root,
+                    gpu_available=self.gpu_available,
+                    gpu_device=gpu_device,
+                )
                 
                 # Schedule automatic reports
                 self.schedule_daily_report()
@@ -520,6 +535,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 SYSTEM INFORMATION:
 ------------------
 GPU Available: {self.gpu_available}
+GPU Device: {self.gpu_names[self.gpu_device] if self.gpu_available and self.gpu_names else 'N/A'}
 Python Version: {sys.version.split()[0]}
 Operating System: {os.name}
 

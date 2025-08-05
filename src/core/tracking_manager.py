@@ -106,13 +106,14 @@ class OptimizedFaceTracker:
 
 
 class TrackingManager:
-    def __init__(self, gpu_mode=True):
+    def __init__(self, gpu_mode=True, gpu_device: int = 0):
         self.gpu_mode = gpu_mode
+        self.gpu_device = gpu_device
         self.active_tracks = {}
         self.deepsort = DeepSort()
 
         self.db_manager = DatabaseManager()
-        self.face_engine = FaceRecognitionEngine(gpu_mode=gpu_mode)
+        self.face_engine = FaceRecognitionEngine(gpu_mode=gpu_mode, gpu_device=gpu_device)
 
         self.max_fail_count = 3
         self.customer_processing_timeout = 5.0

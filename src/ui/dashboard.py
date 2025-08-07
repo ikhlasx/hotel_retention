@@ -666,79 +666,47 @@ class HotelDashboard:
         except Exception as e:
             print(f"❌ New customer persistence processing error: {e}")
 
-    def draw_faces_with_persistent_messages(self, frame):
-        """Enhanced drawing with persistent face tracking messages"""
+    def draw_faces_with_tracking_messages(self, frame):
+        """
+        Draws persistent welcome/already-counted messages for each track using actual tracking IDs,
+        not per-frame detections.
+        Should be called instead of (or as an enhancement to) your previous draw_faces_with_working_messages.
+        """
         try:
-            current_time = time.time()
-            
-            # Clean up expired tracking data
-            self.cleanup_expired_tracking()
-            
-            # Process all current detections
-            if hasattr(self, 'current_detections'):
-                for detection in self.current_detections:
-                    bbox = detection.get('bbox')
-                    confidence = detection.get('confidence', 0.0)
-                    
-                    if bbox is not None:
-                        x1, y1, x2, y2 = [int(coord) for coord in bbox]
-                        
-                        # Check for persistent message first
-                        persistent_message, persistent_color, tracking_id = self.get_persistent_message_for_face(bbox)
-                        
-                        if persistent_message:
-                            # Draw persistent message with special styling
-                            # Thicker border for persistent messages
-                            cv2.rectangle(frame, (x1-3, y1-3), (x2+3, y2+3), persistent_color, 4)
-                            
-                            # Draw "IDENTIFIED" indicator
-                            cv2.putText(frame, "IDENTIFIED", (x1, y1-40), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, persistent_color, 2)
-                            
-                            # Draw main message BELOW the face with larger font
-                            if persistent_message:
-                                lines = persistent_message.split('\n')
-                                for j, line in enumerate(lines):
-                                    text_y = y2 + 20 + j * 20
-                                    cv2.putText(frame, line, (x1, text_y),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, persistent_color, 2)  # Larger font
-                            
-                            # Draw tracking ID
-                            cv2.putText(frame, f"Track: {tracking_id}", (x1, y2 + 45),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                            
-                        else:
-                            # Regular message handling
-                            bbox_key = self.get_bbox_key(bbox)
-                            
-                            if self.should_display_message(bbox_key):
-                                message_data = self.face_messages.get(bbox_key, {})
-                                message = message_data.get('message', '')
-                                color = message_data.get('color', (0, 255, 0))
-                                
-                                # Draw regular bounding box
-                                cv2.rectangle(frame, (x1-2, y1-2), (x2+2, y2+2), color, 3)
-                                
-                                # Draw message below the face
-                                if message:
-                                    lines = message.split('\n')
-                                    for j, line in enumerate(lines):
-                                        text_y = y2 + 20 + j * 20
-                                        cv2.putText(frame, line, (x1, text_y),
-                                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                            else:
-                                # Just draw basic bounding box
-                                cv2.rectangle(frame, (x1-2, y1-2), (x2+2, y2+2), (128, 128, 128), 2)
-                        
-                        # Always draw confidence
-                        cv2.putText(frame, f"Conf: {confidence:.3f}", (x1, y1-5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-            
-            return frame
-            
+            # Get the current active tracks from TrackingManager (you should keep this updated in your main loop)
+            current_tracks = []
+            if hasattr(self, 'tracking_manager') and self.tracking_manager:
+                current_tracks = list(self.tracking_manager.active_tracks.values())
+
+            for track in current_tracks:
+                bbox = track.display_bbox if hasattr(track, 'display_bbox') else track.bbox
+                x1, y1, x2, y2 = [int(c) for c in bbox]
+                color = getattr(track, 'color', (0, 255, 0))
+                message = getattr(track, 'display_message', 'Checking...')
+                visits_msg = f"Total Visits: {getattr(track, 'total_visits', 0)}" if hasattr(track, 'total_visits') else ""
+
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                # Draw main message BELOW face
+                if message:
+                    lines = message.split('\n')
+                    for j, line in enumerate(lines):
+                        text_y = y2 + 20 + j * 22
+                        cv2.putText(frame, line, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+                # Draw visits message ABOVE face
+                if visits_msg:
+                    cv2.putText(frame, visits_msg, (x1, y1 - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+
+                # Draw confidence if available
+                if hasattr(track, 'display_confidence'):
+                    cv2.putText(frame, f"Conf: {track.display_confidence:.2f}", (x1, y1-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
         except Exception as e:
-            print(f"❌ Persistent message drawing error: {e}")
-            return frame        
+            print(f"❌ Error in draw_faces_with_tracking_messages: {e}")
+        return frame
+
     def should_show_persistent_message(self, bbox_key):
         """Check if should show persistent identification message"""
         if bbox_key not in self.persistent_identifications:

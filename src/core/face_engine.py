@@ -262,32 +262,40 @@ class FaceRecognitionEngine:
         return self.ultra_optimized_face_detection(frame)
 
     def lightning_fast_customer_identification(self, face_embedding):
-        """Enhanced customer identification with optimal thresholds"""
+        """Ultra-fast customer identification with dot product optimization"""
         if face_embedding is None or len(self.customer_database) == 0:
             return None, 0.0
 
         try:
             best_match_id = None
             best_similarity = 0.0
+            
+            # Normalize embedding once outside the loop
+            embedding_norm = np.linalg.norm(face_embedding)
+            if embedding_norm == 0:
+                return None, 0.0
+            face_embedding_normalized = face_embedding / embedding_norm
 
-            embedding_reshaped = face_embedding.reshape(1, -1)
-
-            # Process customers with optimization
-            customer_items = list(self.customer_database.items())[:200]  # Optimized limit
+            # Process only top 50 most recent customers for speed
+            customer_items = list(self.customer_database.items())[:50]
 
             for customer_id, stored_embedding in customer_items:
                 try:
-                    similarity = cosine_similarity(
-                        embedding_reshaped,
-                        stored_embedding.reshape(1, -1)
-                    )[0][0]
+                    # Fast dot product instead of cosine_similarity
+                    stored_norm = np.linalg.norm(stored_embedding)
+                    if stored_norm == 0:
+                        continue
+                        
+                    stored_normalized = stored_embedding / stored_norm
+                    similarity = float(np.dot(face_embedding_normalized, stored_normalized))
 
                     if similarity > best_similarity:
                         best_similarity = similarity
                         best_match_id = customer_id
 
-                    # Early termination for very high confidence[73]
-                    if similarity > 0.85:
+                    # Early exit for very high confidence (CRITICAL for speed)
+                    if similarity > 0.90:
+                        print(f"⚡ Fast match found: {customer_id} ({similarity:.3f})")
                         break
 
                 except Exception as e:

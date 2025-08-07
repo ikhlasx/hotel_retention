@@ -707,6 +707,18 @@ class HotelDashboard:
             print(f"❌ Error in draw_faces_with_tracking_messages: {e}")
         return frame
 
+    def cleanup_lost_tracks(self):
+        """
+        Remove persistent messages and data for tracks that have left the screen (not just moved).
+        Call after updating tracks in each processing loop.
+        """
+        if not hasattr(self, 'tracking_manager'):
+            return
+        current_ids = set(self.tracking_manager.active_tracks.keys())
+        for tid in list(self.face_messages.keys()):
+            if tid not in current_ids:
+                del self.face_messages[tid]
+
     def should_show_persistent_message(self, bbox_key):
         """Check if should show persistent identification message"""
         if bbox_key not in self.persistent_identifications:
@@ -753,8 +765,9 @@ class HotelDashboard:
                     # Update DeepSort tracks
                     tracks = self.tracking_manager.update_tracks(detections)
 
-                # Draw retention information for tracked objects
-                frame = self.tracking_manager.draw_retention_info(frame, tracks)
+                # Clean up messages for lost tracks and draw persistent tracking messages
+                self.cleanup_lost_tracks()
+                frame = self.draw_faces_with_tracking_messages(frame)
 
                 # Thread-safe frame update
                 with self.capture_lock:
@@ -1088,96 +1101,6 @@ class HotelDashboard:
                 if bbox_key in self.processed_faces:
                     del self.processed_faces[bbox_key]
 
-    def draw_faces_with_working_messages(self, frame):
-        """Draw faces with WORKING message system - THIS IS THE KEY FIX"""
-        try:
-            current_time = time.time()
-
-            # Clean up expired tracking IDs and messages
-            self.cleanup_expired_tracking()
-            
-            # **CRITICAL: Process all current detections and draw messages**
-            if hasattr(self, 'current_detections'):
-                for detection in self.current_detections:
-                    bbox = detection.get('bbox')
-                    confidence = detection.get('confidence', 0.0)
-                    
-                    if bbox is not None:
-                        x1, y1, x2, y2 = [int(coord) for coord in bbox]
-                        bbox_key = self.get_bbox_key(bbox)
-                        
-                        # Get message data for this face
-                        message_data = self.face_messages.get(bbox_key, {})
-                        message = message_data.get('message', 'Detecting...')
-                        color = message_data.get('color', (0, 255, 0))
-                        visits_message = message_data.get('visits_message', '')
-                        
-                        # **CRITICAL: Draw main bounding box**
-                        cv2.rectangle(frame, (x1-2, y1-2), (x2+2, y2+2), color, 3)
-                        
-                        # **CRITICAL: Draw main message BELOW the face**
-                        if message:
-                            lines = message.split('\n')
-                            for j, line in enumerate(lines):
-                                text_y = y2 + 20 + j * 20
-                                cv2.putText(frame, line, (x1, text_y),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                        # **CRITICAL: Draw visits message ABOVE the face for visibility**
-                        if visits_message:
-                            text_pos = (x1, y1 - 40)
-                            cv2.putText(frame, visits_message, text_pos,
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-                        
-                        # Draw confidence
-                        cv2.putText(frame, f"Conf: {confidence:.3f}", (x1, y1-5),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            
-            # Draw system overlay
-            self.draw_enhanced_system_overlay(frame)
-            
-            return frame
-            
-        except Exception as e:
-            print(f"❌ Draw faces with working messages error: {e}")
-            return frame
-
-    def draw_enhanced_system_overlay(self, frame):
-        """Draw enhanced system status overlay"""
-        try:
-            frame_height, frame_width = frame.shape[:2]
-            
-            # System status information
-            status_info = [
-                f"🎯 WORKING MESSAGE FLOW SYSTEM",
-                f"Active Messages: {len(self.face_messages)}",
-                f"Processed Faces: {len(self.processed_faces)}",
-                f"FPS: {self.current_fps:.1f}",
-                f"Frame: {self.frame_count}",
-                f"Time: {datetime.now().strftime('%H:%M:%S')}"
-            ]
-            
-            # Position at top-right
-            start_x = frame_width - 320
-            start_y = 30
-            
-            # Draw semi-transparent background
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (start_x - 10, start_y - 20),
-                         (start_x + 310, start_y + len(status_info) * 25 + 10), 
-                         (0, 0, 0), -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            
-            # Draw status text
-            for i, info in enumerate(status_info):
-                y_pos = start_y + i * 25
-                color = (0, 255, 255) if i == 0 else (255, 255, 255)
-                thickness = 2 if i == 0 else 1
-                cv2.putText(frame, info, (start_x, y_pos),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, thickness)
-            
-        except Exception as e:
-            print(f"❌ System overlay error: {e}")
 
     def get_stable_frame(self):
         """Get stable frame with error handling"""

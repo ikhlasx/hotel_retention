@@ -41,10 +41,12 @@ class HotelDashboard:
         self.auto_capture_enabled = False
         
         # Visit tracking system
+        # ✅ ENHANCED: Separate counters for customer types
         self.visit_counts = {
             'total_today': 0,
-            'known_customers': 0,
-            'new_customers': 0,
+            'new_customers': 0,           # First-time visitors
+            'returning_customers': 0,     # Known customers with new visits
+            'returning_already_counted': 0, # Known customers already counted today
             'staff_checkins': 0
         }
         
@@ -64,13 +66,15 @@ class HotelDashboard:
         self.current_fps = 0
         self.frame_count = 0
         # Manual tracking structures removed in favor of DeepSort persistent IDs
-        
+        self._stats_loop_running = False
+        self.current_detections_count = 0  
+        self.current_tracks_count = 0        
         # Ultra-optimization settings
         self.process_every_n_frames = 2
         self.checking_duration = 2.0
         self.display_duration = 5.0
         self.auto_register_delay = 3.0
-        
+        self._stats_loop_running = False
         # Detection statistics
         self.detection_stats = {
             'total_detections': 0,
@@ -274,12 +278,92 @@ class HotelDashboard:
         
         self.welcome_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         welcome_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    
+    def setup_tracking_dashboard_connection(self):
+        """CRITICAL: Connect tracking manager to dashboard"""
+        try:
+            # Create callback function to bridge tracking manager and dashboard
+            def dashboard_counter_callback(counter_type):
+                """Bridge function: Convert tracking events to dashboard updates"""
+                try:
+                    print(f"🔗 Dashboard callback triggered: {counter_type}")
+                    
+                    # Schedule GUI update on main thread immediately
+                    self.parent.after_idle(lambda: self.increment_visit_counter(counter_type))
+                    print(f"✅ Counter callback processed: {counter_type}")
+                    
+                except Exception as e:
+                    print(f"❌ Dashboard callback error: {e}")
+            
+            # Set the callback in tracking manager
+            if hasattr(self, 'tracking_manager') and self.tracking_manager:
+                self.tracking_manager.dashboard_callback = dashboard_counter_callback
+                print("✅ Dashboard callback connected to tracking manager")
+            
+            # Initialize detection/track counters
+            self.current_detections_count = 0
+            self.current_tracks_count = 0
+            print("✅ Statistics counters initialized")
+                
+        except Exception as e:
+            print(f"❌ Failed to setup tracking-dashboard connection: {e}")
+
+    def increment_visit_counter(self, visit_type):
+        """ENHANCED: Increment visit counters with immediate GUI updates"""
+        try:
+            current_time = datetime.now()
+            
+            # Check if it's a new day
+            if current_time.date() != self.current_date:
+                self.reset_daily_counters()
+                self.current_date = current_time.date()
+
+            # ✅ ENHANCED: Proper customer type counting
+            if visit_type == 'new_customer':
+                self.visit_counts['new_customers'] += 1
+                self.visit_counts['total_today'] += 1
+                print(f"🆕 NEW CUSTOMER counted! Total new today: {self.visit_counts['new_customers']}")
+                
+            elif visit_type == 'returning_new_visit':
+                if 'returning_customers' not in self.visit_counts:
+                    self.visit_counts['returning_customers'] = 0
+                self.visit_counts['returning_customers'] += 1
+                self.visit_counts['total_today'] += 1
+                print(f"🔄 RETURNING CUSTOMER (new visit) counted! Total returning: {self.visit_counts['returning_customers']}")
+                
+            elif visit_type == 'returning_already_counted':
+                # Don't increment total_today since already counted
+                print(f"🔒 RETURNING CUSTOMER (already counted today) - no count increment")
+                
+            elif visit_type == 'staff_checkin':
+                self.visit_counts['staff_checkins'] += 1
+
+            # ✅ CRITICAL: Force immediate GUI updates
+            self.parent.after_idle(self.update_todays_activity)
+            self.parent.after_idle(self.update_live_performance_stats)
+            
+        except Exception as e:
+            print(f"❌ Visit counter increment error: {e}")
 
     def setup_engines(self):
         """Initialize recognition engines"""
         self.face_engine = None
         self.tracking_manager = None
         self.camera_manager = CameraManager()
+    def update_recognition_statistics(self, detection_count, track_count):
+        """CRITICAL: Update real-time detection statistics"""
+        try:
+            # Update counters
+            self.current_detections_count = detection_count
+            self.current_tracks_count = track_count
+            
+            # Force immediate GUI update
+            self.parent.after_idle(self.update_live_performance_stats)
+            
+            print(f"📊 Stats Update: Detections={detection_count}, Tracks={track_count}")
+            
+        except Exception as e:
+            print(f"❌ Recognition statistics update error: {e}")
 
     def _get_current_camera_ip(self):
         """Fetch current camera IP from configuration"""
@@ -317,7 +401,16 @@ class HotelDashboard:
             
             # **CRITICAL: Fix database schema**
             self.fix_database_schema()
+            # ✅ CRITICAL: Setup dashboard-tracking connection
+        # ✅ ADD THESE CRITICAL LINES:
+            self.setup_tracking_dashboard_connection()
+            self.ensure_statistics_running()
             
+            # Initialize recognition counters
+            self.current_detections_count = 0
+            self.current_tracks_count = 0
+            
+            print("✅ Enhanced recognition system started with statistics connection")
             self.tracking_manager = TrackingManager(gpu_mode=gpu_mode)
             
             # Start camera
@@ -339,15 +432,25 @@ class HotelDashboard:
             self.process_thread.start()
             
             # Start statistics update loop
-            self.stats_thread = threading.Thread(target=self.update_statistics_loop, daemon=True)
+            self.stats_thread = threading.Thread(target=self.start_statistics_loop, daemon=True)
             self.stats_thread.start()
             
-            print("✅ Enhanced recognition system started successfully")
+            print("✅ Enhanced recognition system started with unified statistics")
             
         except Exception as e:
             print(f"❌ Start recognition error: {e}")
             messagebox.showerror("Error", f"Failed to start recognition: {e}")
-
+    def ensure_statistics_running(self):
+        """Ensure statistics loop is running"""
+        try:
+            if not getattr(self, '_stats_loop_running', False):
+                print("🔄 Starting statistics loop...")
+                self.start_statistics_loop()
+            else:
+                print("✅ Statistics loop already running")
+        except Exception as e:
+            print(f"❌ Statistics ensure error: {e}")
+            
     def fix_database_schema(self):
         """Fix database schema to include visit_date column"""
         try:
@@ -1438,23 +1541,13 @@ class HotelDashboard:
         except Exception as e:
             print(f"❌ Reset stats error: {e}")
 
-    def update_statistics_loop(self):
-        """Statistics update loop - WORKING IMPLEMENTATION"""
-        while self.running:
-            try:
-                # Update GUI statistics safely
-                self.parent.after_idle(self.update_live_performance_stats)
-                self.parent.after_idle(self.update_todays_activity)
-                self.parent.after_idle(self.update_database_counts)
-                
-                time.sleep(2)  # Update every 2 seconds
-            except Exception as e:
-                print(f"❌ Statistics loop error: {e}")
-                time.sleep(5)
-
     def update_live_performance_stats(self):
-        """Update Live Performance Stats section with real-time data"""
+        """FIXED: Update Live Performance Stats with proper error handling"""
         try:
+            # Get current detection data
+            detection_count = getattr(self, 'current_detections_count', 0)
+            track_count = getattr(self, 'current_tracks_count', 0)
+            
             # Update FPS
             fps_text = f"FPS: {self.current_fps:.1f}"
             if self.current_fps > 20:
@@ -1463,91 +1556,93 @@ class HotelDashboard:
                 self.fps_label.config(text=fps_text, foreground="orange")
             else:
                 self.fps_label.config(text=fps_text, foreground="red")
-            
+
             # Update Face Detections
-            detection_count = len(self.current_detections) if hasattr(self, 'current_detections') else 0
             self.detections_label.config(text=f"Face Detections: {detection_count}")
             
-            # Update Active Tracks
-            track_count = len(self.current_tracks) if hasattr(self, 'current_tracks') else 0
+            # Update Active Tracks  
             self.tracks_label.config(text=f"Active Tracks: {track_count}")
             
-            # Update processing status indicator
+            # Update processing status
             if self.running:
                 status_color = "green" if detection_count > 0 else "orange"
                 self.processing_status.config(
-                    text=f"🧠 Processing: Active ({detection_count} faces)", 
+                    text=f"🧠 Processing: Active ({detection_count} faces)",
                     foreground=status_color
                 )
-            
+            else:
+                self.processing_status.config(text="🧠 Processing: Stopped", foreground="red")
+                
             print(f"📊 Stats Updated - FPS: {self.current_fps:.1f}, Detections: {detection_count}, Tracks: {track_count}")
             
         except Exception as e:
             print(f"❌ Live performance stats update error: {e}")
 
     def update_todays_activity(self):
-        """Update Today's Activity section with real-time visit data"""
+        """UNIFIED: Today's activity with consistent naming"""
         try:
-            # Update from visit_counts (real-time counters)
             total_today = self.visit_counts.get('total_today', 0)
-            known_customers = self.visit_counts.get('known_customers', 0)
-            new_customers = self.visit_counts.get('new_customers', 0)
+            new_customers = self.visit_counts.get('new_customers', 0) 
+            returning_customers = self.visit_counts.get('returning_customers', 0)
             staff_checkins = self.visit_counts.get('staff_checkins', 0)
+
+            # ✅ UNIFIED: Consistent label updates
+            if hasattr(self, 'visits_today_label'):
+                self.visits_today_label.config(
+                    text=f"Total Visits: {total_today}",
+                    foreground="blue" if total_today > 0 else "gray"
+                )
             
-            # Update labels with color coding
-            self.visits_today_label.config(
-                text=f"Total Visits: {total_today}",
-                foreground="blue" if total_today > 0 else "gray"
-            )
+            if hasattr(self, 'new_customers_label'):
+                self.new_customers_label.config(
+                    text=f"🆕 New Customers: {new_customers}",
+                    foreground="purple" if new_customers > 0 else "gray"
+                )
             
-            self.known_customers_label.config(
-                text=f"Known Customers: {known_customers}",
-                foreground="green" if known_customers > 0 else "gray"
-            )
+            # ✅ UNIFIED: Single label name for returning customers
+            returning_label = getattr(self, 'returning_customers_label', None) or getattr(self, 'known_customers_label', None)
+            if returning_label:
+                returning_label.config(
+                    text=f"🔄 Returning Visits: {returning_customers}",
+                    foreground="green" if returning_customers > 0 else "gray"
+                )
             
-            self.new_customers_label.config(
-                text=f"New Customers: {new_customers}",
-                foreground="purple" if new_customers > 0 else "gray"
-            )
-            
-            self.staff_checkins_label.config(
-                text=f"Staff Check-ins: {staff_checkins}",
-                foreground="orange" if staff_checkins > 0 else "gray"
-            )
-            
-            # Get database stats if available
-            if hasattr(self, 'db_manager') and self.db_manager:
-                try:
-                    today_stats = self.db_manager.get_today_visit_stats()
-                    
-                    # Cross-reference with database data
-                    db_unique_visitors = today_stats.get('unique_visitors_today', 0)
-                    db_total_visits = today_stats.get('total_visits_today', 0)
-                    db_new_customers = today_stats.get('new_customers_today', 0)
-                    db_returning = today_stats.get('returning_customers_today', 0)
-                    
-                    # Update with more accurate database data if available
-                    if db_total_visits > 0:
-                        self.visits_today_label.config(
-                            text=f"Total Visits: {max(total_today, db_total_visits)}"
-                        )
-                        
-                    if db_unique_visitors > 0:
-                        self.known_customers_label.config(
-                            text=f"Known Customers: {max(known_customers, db_returning)}"
-                        )
-                        
-                        self.new_customers_label.config(
-                            text=f"New Customers: {max(new_customers, db_new_customers)}"
-                        )
-                    
-                    print(f"🎯 Activity Updated - Total: {max(total_today, db_total_visits)}, Known: {max(known_customers, db_returning)}, New: {max(new_customers, db_new_customers)}, Staff: {staff_checkins}")
-                    
-                except Exception as db_e:
-                    print(f"⚠️ Database stats unavailable: {db_e}")
+            if hasattr(self, 'staff_checkins_label'):
+                self.staff_checkins_label.config(
+                    text=f"Staff Check-ins: {staff_checkins}",
+                    foreground="orange" if staff_checkins > 0 else "gray"
+                )
+
+            print(f"🎯 Activity Updated - Total: {total_today}, 🆕 New: {new_customers}, 🔄 Returning: {returning_customers}, Staff: {staff_checkins}")
             
         except Exception as e:
             print(f"❌ Today's activity update error: {e}")
+
+    def start_statistics_loop(self):
+        """UNIFIED: Start the statistics update loop"""
+        try:
+            if not self._stats_loop_running:
+                self._stats_loop_running = True
+                self._statistics_update_loop()
+                print("✅ Statistics update loop started")
+        except Exception as e:
+            print(f"❌ Failed to start statistics loop: {e}")
+
+    def _statistics_update_loop(self):
+        """UNIFIED: Main statistics update loop (remove other versions)"""
+        try:
+            if self.running and self._stats_loop_running:
+                # Update all statistics
+                self.update_live_performance_stats()
+                self.update_todays_activity() 
+                self.update_database_counts()
+                
+                # Schedule next update
+                self.parent.after(2000, self._statistics_update_loop)
+        except Exception as e:
+            print(f"❌ Statistics loop error: {e}")
+            if self._stats_loop_running:
+                self.parent.after(5000, self._statistics_update_loop)
 
     def update_database_counts(self):
         """Update database-driven statistics"""
@@ -1582,54 +1677,54 @@ class HotelDashboard:
         except Exception as e:
             print(f"❌ Database counts update error: {e}")
 
-    def increment_visit_counter(self, visit_type):
-        """Increment visit counters for real-time stats"""
-        try:
-            current_time = datetime.now()
-            
-            # Check if it's a new day
-            if current_time.date() != self.current_date:
-                self.reset_daily_counters()
-                self.current_date = current_time.date()
-            
-            # Increment appropriate counter
-            if visit_type == 'total':
-                self.visit_counts['total_today'] += 1
-            elif visit_type == 'known_customer':
-                self.visit_counts['known_customers'] += 1
-                self.visit_counts['total_today'] += 1
-            elif visit_type == 'new_customer':
-                self.visit_counts['new_customers'] += 1
-                self.visit_counts['total_today'] += 1
-            elif visit_type == 'staff_checkin':
-                self.visit_counts['staff_checkins'] += 1
-            
-            print(f"📈 Counter incremented: {visit_type} - Total today: {self.visit_counts['total_today']}")
-            
-            # Trigger immediate stats update
-            self.parent.after_idle(self.update_todays_activity)
-            
-        except Exception as e:
-            print(f"❌ Visit counter increment error: {e}")
-
     def reset_daily_counters(self):
-        """Reset daily counters for new day"""
+        """UNIFIED: Reset daily counters with consistent structure"""
         try:
             self.visit_counts = {
                 'total_today': 0,
-                'known_customers': 0,
                 'new_customers': 0,
+                'returning_customers': 0,  # Unified naming
                 'staff_checkins': 0
             }
-            
-            # Clear tracking sets
-            self.customers_today.clear()
-            self.staff_today.clear()
-            
-            print(f"🔄 Daily counters reset for new day: {datetime.now().date()}")
-            
+            print(f"🔄 Daily counters reset for: {datetime.now().date()}")
         except Exception as e:
             print(f"❌ Daily counter reset error: {e}")
+
+    def process_recognition_frame(self, frame):
+        """FIXED: Process recognition frame with statistics updates (NO RECURSION)"""
+        try:
+            if not self.running or frame is None:
+                return frame
+
+            # Get face detections from engine
+            if hasattr(self, 'face_engine') and self.face_engine:
+                detections = self.face_engine.detect_faces(frame)
+            else:
+                detections = []
+            
+            detection_count = len(detections)
+            
+            if detections and hasattr(self, 'tracking_manager') and self.tracking_manager:
+                # Update tracks with new detections
+                tracks = self.tracking_manager.update_tracks(detections)
+                track_count = len(tracks)
+                
+                # Draw tracking info on frame
+                frame = self.tracking_manager.draw_retention_info(frame, tracks)
+                
+                print(f"🔍 Recognition: Found {detection_count} faces, {track_count} tracks")
+            else:
+                track_count = 0
+            
+            # ✅ CRITICAL: Update statistics immediately
+            self.update_recognition_statistics(detection_count, track_count)
+            
+            return frame
+            
+        except Exception as e:
+            print(f"❌ Recognition processing error: {e}")
+            return frame
+
 
     def get_real_time_stats(self):
         """Get comprehensive real-time statistics"""

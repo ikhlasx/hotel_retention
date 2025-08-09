@@ -1,8 +1,8 @@
 {
-    "source_type": "rtsp",
+    "source_type": "ip",
     "resolution": "1920x1080",
     "fps": 25,
     "buffer_size": 5,
     "transport": "UDP",
-    "rtsp_url": "rtsp://admin:Ikhlas@123@192.168.1.99:554/Streaming/Channels/101"
+    "rtsp_url": "rtsp://admin:Ikhlas@123@192.168.1.86:554/Streaming/Channels/101"
 }

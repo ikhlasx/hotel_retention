@@ -395,23 +395,24 @@ class DatabaseManager:
             return []
 
     def load_staff(self):
-        """Load all active staff and their embeddings"""
+        """Load all active staff and their embeddings - FIXED"""
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-                
                 cursor.execute("SELECT staff_id, embedding FROM staff WHERE is_active = 1 AND embedding IS NOT NULL")
-                staff = []
                 
+                staff = []
                 for row in cursor.fetchall():
                     staff_id, embedding_blob = row
                     try:
                         if embedding_blob:
+                            # FIXED: Use pickle.loads consistently
                             embedding = pickle.loads(embedding_blob)
-                            staff.append({'id': staff_id, 'embedding': embedding})
+                            if isinstance(embedding, np.ndarray) and embedding.size > 0:
+                                staff.append({'id': staff_id, 'embedding': embedding})
                     except Exception as e:
-                        print(f"⚠️ Error loading embedding for staff {staff_id}: {e}")
+                        print(f"⚠️ Embedding error for {staff_id}: {e}")
                         continue
                 
                 conn.close()
@@ -421,6 +422,7 @@ class DatabaseManager:
         except Exception as e:
             print(f"❌ Error loading staff: {e}")
             return []
+
 
     def get_all_customers(self):
         """Get all customers with detailed information"""

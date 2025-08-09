@@ -444,6 +444,31 @@ class FaceRecognitionEngine:
         except Exception as e:
             print(f"Staff addition error: {e}")
             return False
+    def load_staff(self):
+        """Load all active staff and their embeddings - FIXED MISSING METHOD"""
+        try:
+            staff_members = self.db_manager.get_all_staff()
+            staff_list = []
+            loaded_staff = 0
+            
+            for staff in staff_members:
+                if staff['embedding'] is not None:
+                    try:
+                        # CONSISTENT: Use pickle.loads like customers
+                        embedding = pickle.loads(staff['embedding'])
+                        if isinstance(embedding, np.ndarray) and embedding.size > 0:
+                            staff_list.append({'id': staff['staff_id'], 'embedding': embedding})
+                            loaded_staff += 1
+                    except Exception as e:
+                        print(f"⚠️ Error loading embedding for staff {staff['staff_id']}: {e}")
+                        continue
+            
+            print(f"✅ Loaded {loaded_staff} staff members")
+            return staff_list
+            
+        except Exception as e:
+            print(f"❌ Error loading staff: {e}")
+            return []
 
     def get_statistics(self):
         """Get system statistics"""

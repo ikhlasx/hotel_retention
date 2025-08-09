@@ -61,17 +61,13 @@ class OptimizedFaceTracker:
         self.fail_count = 0
 
     def update_customer_info(self, customer_id, visit_status):
-        # ✅ CRITICAL: Check if already permanently processed
-        if getattr(self, 'permanently_recognized', False):
-            print(f"⚠️ Customer {customer_id} already permanently recognized, skipping")
-            return
-            
-        print(f"📝 PERMANENT: Setting customer info for {customer_id}")
+        """FIXED: Enhanced customer info update with guaranteed message display"""
         
+        print(f"📝 PERMANENT: Setting customer info for {customer_id}")
         self.customer_id = customer_id
         self.visit_status = visit_status
         self.customer_processed = True
-        self.permanently_recognized = True  # ✅ PERMANENT FLAG
+        self.permanently_recognized = True
         self.never_recheck = True
         self.recognition_locked = True
 
@@ -81,27 +77,31 @@ class OptimizedFaceTracker:
             self.is_returning_customer = visit_status.get('visited_today', False)
 
             if visit_status.get('visited_today'):
-                # ✅ PERMANENT MESSAGE - NO TIMEOUT
+                # ✅ GUARANTEED PERMANENT MESSAGE for existing visitors
                 welcome_msg = f"Welcome back!\nAlready counted today\nTotal visits: {self.total_visits}"
                 self.final_message = welcome_msg
                 self.display_message = welcome_msg
-                self.persistent_message = True  # ✅ PERMANENT
+                self.persistent_message = True
                 self.state = "permanently_known"
-                print(f"✅ PERMANENT: Already counted message set")
+                print(f"✅ PERMANENT: Already counted message set: {welcome_msg}")
             else:
+                # ✅ GUARANTEED PERMANENT MESSAGE for new visits
                 new_total = self.total_visits + 1
-                # ✅ PERMANENT MESSAGE - NO TIMEOUT  
                 welcome_msg = f"Welcome!\nVisit #{new_total} recorded\nThank you for visiting"
                 self.final_message = welcome_msg
                 self.display_message = welcome_msg
-                self.persistent_message = True  # ✅ PERMANENT
+                self.persistent_message = True
                 self.state = "permanently_known"
-                print(f"✅ PERMANENT: New visit message set")
-        
-        # Mark as permanently processed
+                print(f"✅ PERMANENT: New visit message set: {welcome_msg}")
+
+        # ✅ FORCE message activation
         self.customer_message_set = True
         self.processing_complete = True
         self.message_time = time.time()  # Reset message timer
+        
+        # ✅ ENSURE message is immediately visible
+        self.message_shown = True
+
 
 
     def set_retention_message(self, message, duration=8.0, persistent=False):
@@ -157,6 +157,18 @@ class OptimizedFaceTracker:
 
         return is_active
 
+    def force_display_message(self, message, permanent=True):
+        """FORCE a message to be displayed immediately and permanently"""
+        self.display_message = message
+        self.final_message = message
+        self.persistent_message = permanent
+        self.message_shown = True
+        self.message_time = time.time()
+        
+        if permanent:
+            self.display_duration = 999999  # Effectively permanent
+            
+        print(f"🔥 FORCED MESSAGE: {message} (permanent: {permanent})")
 
     @property
     def state(self):
@@ -196,101 +208,90 @@ class TrackingManager:
         self.customer_processing_timeout = 5.0
 
     def process_customer_retention(self, track):
-        """FIXED: Enhanced retention with permanent recognition"""
+        """ENHANCED: Process with separate new vs returning customer tracking"""
         try:
-            # ✅ CRITICAL: Skip if already permanently recognized
+            # Skip if already processed
             if getattr(track, "permanently_recognized", False):
                 print(f"🔒 Track {track.track_id} permanently recognized - skipping processing")
-                return  # NEVER reprocess permanently recognized customers
-                
-            # ✅ CRITICAL: Skip if recognition is locked
-            if getattr(track, "recognition_locked", False):
-                return
-                
-            # ✅ CRITICAL: Skip if already completely processed
-            if getattr(track, "processing_complete", False):
                 return
 
-            # ✅ CRITICAL: Skip if currently being processed
-            if getattr(track, "customer_processed", False):
-                return
-
-            # Mark as being processed to prevent re-entry
+            # Mark as being processed
             track.customer_processed = True
-            track.recognition_locked = True  # Lock to prevent re-entry
+            track.recognition_locked = True
             print(f"🔄 Processing customer for track {track.track_id}")
 
-            # Set initial checking message ONLY if not permanently recognized
-            if not getattr(track, 'permanently_recognized', False) and not track.message_shown:
+            # Set initial checking message
+            if not track.message_shown:
                 track.set_retention_message("Analyzing customer...", duration=3.0, persistent=False)
 
-            best_match_id = None
-            best_score = 0.0
-            threshold = 0.55
-            embedding = track.embedding
+            # Try to identify existing customer
+            best_match_id, best_score = self.face_engine.lightning_fast_customer_identification(track.embedding)
 
-            # Use the fast identification method
-            best_match_id, best_score = self.face_engine.lightning_fast_customer_identification(embedding)
-
-            if best_score >= threshold and best_match_id:
-                print(f"✅ PERMANENT RECOGNITION: {best_match_id} (confidence: {best_score:.3f})")
-                track.confidence = best_score
-                
-                # ✅ MARK AS PERMANENTLY RECOGNIZED BEFORE PROCESSING
+            if best_score >= 0.55 and best_match_id:
+                # ✅ RETURNING CUSTOMER (Existing in database)
+                print(f"✅ RETURNING CUSTOMER: {best_match_id} (confidence: {best_score:.3f})")
+                track.customer_type = "returning"  # 🔑 KEY: Mark as returning
                 track.permanently_recognized = True
-                track.never_recheck = True
+                track.confidence = best_score
 
-                # Check visit status
+                # Check if already visited today
                 visit_status = self.db_manager.check_daily_visit_status(best_match_id)
-
+                
                 if visit_status['visited_today']:
+                    # Already counted today
                     track.update_customer_info(best_match_id, visit_status)
+                    # 📊 Increment returning customer counter (already counted)
+                    self._increment_customer_counter("returning_already_counted")
                 else:
-                    # Record new visit
+                    # New visit today for returning customer
                     visit_result = self.db_manager.record_customer_visit(best_match_id, best_score)
                     if visit_result['success']:
                         track.update_customer_info(best_match_id, visit_result)
-                    else:
-                        # Even failed visits get permanent recognition
-                        track.final_message = "Welcome back!\nAlready processed"
-                        track.display_message = track.final_message
-                        track.permanently_recognized = True
-                        track.persistent_message = True
-                        track.state = "permanently_known"
+                        # 📊 Increment returning customer counter (new visit)
+                        self._increment_customer_counter("returning_new_visit")
 
             else:
-                # New customer registration
+                # ✅ NEW CUSTOMER (Unknown face - needs registration)
                 if track.stability_frames >= track.min_stability:
-                    print(f"🆕 PERMANENT REGISTRATION: New customer (confidence: {best_score:.3f})")
+                    print(f"🆕 NEW CUSTOMER: Unknown face (confidence: {best_score:.3f})")
+                    track.customer_type = "new"  # 🔑 KEY: Mark as new
+                    
+                    # Register new customer
                     new_customer_id = self.face_engine.register_new_customer(track.embedding)
                     if new_customer_id:
-                        # ✅ MARK NEW CUSTOMER AS PERMANENTLY RECOGNIZED
                         track.permanently_recognized = True
-                        track.never_recheck = True
                         track.customer_id = new_customer_id
                         
+                        # Record first visit
                         visit_result = self.db_manager.record_customer_visit(new_customer_id, 0.9)
                         if visit_result['success']:
                             track.update_customer_info(new_customer_id, visit_result)
-                        else:
-                            # Set permanent new customer message
-                            track.final_message = f"Welcome!\nRegistered as {new_customer_id}\nFirst visit!"
-                            track.display_message = track.final_message
-                            track.persistent_message = True
-                            track.state = "permanently_registered"
-                            track.customer_message_set = True
+                            # 📊 Increment NEW customer counter
+                            self._increment_customer_counter("new_customer")
+                        
+                        print(f"🎉 NEW CUSTOMER REGISTERED: {new_customer_id}")
                     else:
                         track.set_retention_message("Welcome visitor!", duration=6.0)
                 else:
-                    if not track.message_shown:
-                        track.set_retention_message("Analyzing customer...", duration=3.0)
+                    # Still analyzing
+                    track.set_retention_message("Analyzing customer...", duration=3.0)
 
         except Exception as e:
             print(f"❌ Customer retention processing error: {e}")
-            # Even errors get some recognition to prevent re-processing
             track.set_retention_message("Welcome!", duration=6.0)
             track.processing_complete = True
 
+    def _increment_customer_counter(self, counter_type):
+        """Increment specific customer counters with proper categorization"""
+        try:
+            # This should connect to your dashboard counter system
+            if hasattr(self, 'dashboard_callback') and self.dashboard_callback:
+                self.dashboard_callback(counter_type)
+            
+            print(f"📈 Customer counter incremented: {counter_type}")
+            
+        except Exception as e:
+            print(f"❌ Counter increment error: {e}")
 
 
     def update_tracks(self, detections):
@@ -331,13 +332,14 @@ class TrackingManager:
             return list(self.active_tracks.values())
 
     def draw_retention_info(self, frame, tracks):
+        """FIXED: Enhanced message display with guaranteed permanent message rendering"""
         try:
             current_time = time.time()
-
+            
             for track in tracks:
-                # ✅ DIFFERENT timeout for permanent vs temporary tracks
+                # ✅ ALWAYS show permanent customers (no timeout)
                 if getattr(track, 'permanently_recognized', False):
-                    timeout = track.display_duration * 100  # Much longer for permanent
+                    timeout = 999999  # Effectively permanent
                 else:
                     timeout = track.display_duration
                     
@@ -352,42 +354,41 @@ class TrackingManager:
 
                 # ✅ ENHANCED color coding for permanent recognition
                 if getattr(track, 'permanently_recognized', False):
-                    if track.state == "permanently_known":
-                        color = (0, 255, 0)  # Bright green for known customers
-                    elif track.state == "permanently_registered":
-                        color = (255, 0, 255)  # Magenta for new customers
-                    else:
-                        color = (0, 255, 0)  # Default green for permanent
-                else:
-                    # Original color mapping for temporary states
-                    if getattr(track, 'customer_processed', False):
-                        color = (255, 165, 0)  # Orange for processing
-                    else:
-                        color = (255, 255, 0)  # Yellow for analyzing
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-                # ✅ Show permanent recognition status
-                if getattr(track, 'permanently_recognized', False):
+                    color = (0, 255, 0)  # Bright green for recognized customers
                     status = "RECOGNIZED ✅"
                     cv2.putText(frame, status, (x1, y1 - 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 else:
+                    color = (255, 255, 0)  # Yellow for analyzing
                     cv2.putText(frame, "Processing...", (x1, y1 - 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
+                # Draw bounding box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+                # Track ID and confidence
                 info = f"ID:{track.track_id}"
                 if hasattr(track, 'confidence') and track.confidence > 0:
                     info += f" {track.confidence:.2f}"
-
                 cv2.putText(frame, info, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-                # ✅ SHOW PERMANENT MESSAGES (NO TIMEOUT CHECK)
-                if hasattr(track, 'is_message_active') and track.is_message_active():
+                # ✅ GUARANTEED MESSAGE DISPLAY for permanent customers
+                show_message = False
+                
+                if getattr(track, 'permanently_recognized', False):
+                    # Always show permanent messages
+                    show_message = True
+                elif hasattr(track, 'is_message_active') and track.is_message_active():
+                    # Show temporary messages if active
+                    show_message = True
+                    
+                if show_message and hasattr(track, 'display_message') and track.display_message:
                     lines = track.display_message.split('\n')[:4]
                     for i, line in enumerate(lines):
-                        cv2.putText(frame, line, (x1, y2 + 20 + (i * 15)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                        if line.strip():  # Only show non-empty lines
+                            cv2.putText(frame, line, (x1, y2 + 20 + (i * 15)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    print(f"📺 Displaying message for track {track.track_id}: {track.display_message}")
 
             return frame
 
